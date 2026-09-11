@@ -1,7 +1,7 @@
 // Game state and the day-by-day simulation loop.
 
 import { Rng, subRng } from '../core/rng.js';
-import { clamp, remap, sortBy } from '../core/util.js';
+import { clamp, remap, sortBy, money } from '../core/util.js';
 import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, formatDay, dayToDate } from '../core/calendar.js';
 import { generateWorld, squadStrength, injectCustomPlayers } from '../gen/worldgen.js';
 import { generatePlayer, emptyStats, estimateValue } from '../gen/playergen.js';
@@ -79,6 +79,37 @@ export function newGame(opts = {}) {
   return game;
 }
 
+/**
+ * Hand a club to the player after the world has been generated. Kept separate
+ * from newGame so the setup screen can build a world, let the manager browse
+ * the clubs in it, and then take one over without regenerating everything.
+ */
+export function takeOverClub(game, clubId, managerName, managerNat) {
+  const world = game.world;
+  const club = world.clubs[clubId];
+  if (!club) return false;
+  for (const c of Object.values(world.clubs)) c.isUserClub = false;
+  club.isUserClub = true;
+  game.userClubId = clubId;
+  if (managerName) game.manager.name = managerName;
+  if (managerNat) game.manager.nat = managerNat;
+  club.manager = {
+    name: game.manager.name, nat: game.manager.nat, style: 'Manager',
+    attacking: 12, defending: 12, tactical: 12, manManagement: 12,
+    youthDev: 12, discipline: 12, reputation: game.manager.reputation, yearsAtClub: 0,
+  };
+  club.tactic = autoAssignSpecialists(world, club, autoPick(world, club, club.tactic));
+
+  const league = world.leagues.find((l) => l.id === club.leagueId);
+  news(game, 'media', 'Welcome to the hot seat',
+    `${game.manager.name} takes charge of ${club.name}. The local press are keen to see what direction the new manager takes.`);
+  news(game, 'board', `${world.year}/${String(world.year + 1).slice(2)} season underway`,
+    `The board expect you to ${club.board.expectation.label.toLowerCase()} in the ${league.name}. `
+    + `You have a transfer budget of ${money(club.finances.transferBudget)} and a wage budget of `
+    + `${money(club.finances.wageBudgetAnnual / 52)} per week.`);
+  return true;
+}
+
 export function userClub(game) {
   return game.userClubId ? game.world.clubs[game.userClubId] : null;
 }
@@ -131,8 +162,8 @@ export function startSeason(game, isFirst = false) {
     const league = world.leagues.find((l) => l.id === club.leagueId);
     news(game, 'board', `${world.year}/${String(world.year + 1).slice(2)} season underway`,
       `The board expect you to ${club.board.expectation.label.toLowerCase()} in the ${league.name}. `
-      + `You have a transfer budget of ${Math.round(club.finances.transferBudget).toLocaleString()} and a wage budget of `
-      + `${Math.round(club.finances.wageBudgetAnnual / 52).toLocaleString()} per week.`);
+      + `You have a transfer budget of ${money(club.finances.transferBudget)} and a wage budget of `
+      + `${money(club.finances.wageBudgetAnnual / 52)} per week.`);
     if (isFirst) {
       news(game, 'media', 'Welcome to the hot seat',
         `${game.manager.name} takes charge of ${club.name}. The local press are keen to see what direction the new manager takes.`);
@@ -278,6 +309,22 @@ export function finishFixture(game, fixture, state) {
     reportUserMatch(game, fixture, state, isHome, isHome ? bansHome : bansAway);
   }
 
+  // Full event logs are only worth keeping for the user's own matches; for the
+  // rest of the world the summary is enough, and dropping them keeps both
+  // memory and save files small.
+  const isUserFixture = fixture.homeId === game.userClubId || fixture.awayId === game.userClubId;
+  if (!isUserFixture) {
+    fixture.result.events = null;
+    fixture.result.records = null;
+  } else {
+    game.detailedFixtures = game.detailedFixtures || [];
+    game.detailedFixtures.push(fixture.id);
+    while (game.detailedFixtures.length > 12) {
+      const old = game.fixtures[game.detailedFixtures.shift()];
+      if (old?.result) { old.result.events = null; old.result.records = null; }
+    }
+  }
+
   game.lastResults.unshift({
     day: game.day, comp: fixture.compName, round: fixture.round,
     home: home.short, away: away.short, hg: state.result.homeGoals, ag: state.result.awayGoals,
@@ -370,6 +417,7 @@ export function advanceDay(game) {
 
   // Weekly training and wages.
   if (game.day % 7 === 3) runWeeklyTraining(game, dayRng);
+  if (game.day % 7 === 6) publishTransferDigest(game);
   if (game.day % 7 === 5) {
     for (const club of Object.values(world.clubs)) payWeeklyWages(game, club);
   }
@@ -473,7 +521,7 @@ function runTransferDay(game, rng) {
           game.offers = game.offers || [];
           game.offers.push({ id: `o${Object.keys(game.fixtures).length}_${target.id}_${suitor.id}`, playerId: target.id, clubId: suitor.id, fee: offer, day: game.day });
           news(game, 'transfer', `Offer received for ${target.name}`,
-            `${suitor.name} have offered ${offer.toLocaleString()} for ${target.name}. Review it on the Transfers screen.`,
+            `${suitor.name} have offered ${money(offer)} for ${target.name}. Review it on the Transfers screen.`,
             { playerId: target.id, offerClub: suitor.id, fee: offer });
         }
       }
@@ -481,16 +529,37 @@ function runTransferDay(game, rng) {
   }
 }
 
+/**
+ * Only a fraction of the world's transfers are worth telling the manager
+ * about: marquee moves, business inside their own division, and anyone they
+ * were tracking themselves. Reporting every deal buries the inbox.
+ */
 function reportTransfer(game, deal) {
   const user = userClub(game);
   if (!user) return;
-  const big = deal.fee > 12e6;
-  const involvesRival = deal.to.leagueId === user.leagueId || deal.from?.leagueId === user.leagueId;
-  if (!big && !involvesRival) return;
-  if (!game.rng.chance(big ? 0.9 : 0.25)) return;
-  news(game, 'transfer', `${deal.player.name} joins ${deal.to.name}`,
-    `${deal.to.name} have signed ${deal.player.name}${deal.from ? ` from ${deal.from.name}` : ' on a free transfer'}`
-    + `${deal.fee > 0 ? ` for a reported ${deal.fee.toLocaleString()}` : ''}.`);
+  const body = `${deal.to.name} have signed ${deal.player.name}${deal.from ? ` from ${deal.from.name}` : ' on a free transfer'}`
+    + `${deal.fee > 0 ? ` for a reported ${money(deal.fee)}` : ''}.`;
+
+  // A player the manager was tracking is worth interrupting them for.
+  if (game.shortlist.includes(deal.player.id)) {
+    news(game, 'transfer', `Shortlisted player signs elsewhere: ${deal.player.name}`, body, { playerId: deal.player.id });
+    return;
+  }
+  const sameDivision = deal.to.leagueId === user.leagueId || deal.from?.leagueId === user.leagueId;
+  if (deal.fee < 8e6 && !sameDivision) return;
+  game.pendingTransferNews = game.pendingTransferNews || [];
+  game.pendingTransferNews.push({ line: body, fee: deal.fee, sameDivision });
+}
+
+/** Everything else goes out as one weekly round-up. */
+function publishTransferDigest(game) {
+  const pending = game.pendingTransferNews || [];
+  game.pendingTransferNews = [];
+  if (pending.length < 2) return;
+  const top = sortBy(pending, { key: (d) => d.fee + (d.sameDivision ? 5e6 : 0), desc: true }).slice(0, 6);
+  news(game, 'transfer', `Transfer round-up (${pending.length} deals)`,
+    top.map((d) => `• ${d.line}`).join('\n')
+    + (pending.length > top.length ? `\n\nPlus ${pending.length - top.length} other completed moves.` : ''));
 }
 
 function runYouthIntake(game, rng) {
