@@ -151,14 +151,24 @@ export function abilityForPosition(attrs, pos) {
   return Math.round(1 + Math.pow(norm, 1.18) * 199);
 }
 
-/** Current Ability at the player's best natural position. */
+/**
+ * Current Ability at the player's best natural position.
+ * Cached on the player because this is the hottest call in the simulation;
+ * anything that changes an attribute must call invalidateAbility().
+ */
 export function currentAbility(player) {
+  if (player._ca != null) return player._ca;
   let best = 0;
   for (const pos of player.positions) {
     const a = abilityForPosition(player.attrs, pos);
     if (a > best) best = a;
   }
+  player._ca = best;
   return best;
+}
+
+export function invalidateAbility(player) {
+  player._ca = null;
 }
 
 /** Familiarity 0-20 with a position, from the player's natural positions. */

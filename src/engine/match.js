@@ -187,7 +187,9 @@ function pickByPhase(state, side, phase, exclude = null, posBias = null) {
     const ph = side.strength.perPlayer.find((pp) => pp.entry === e);
     let w = ph ? ph.phases[phase] : 1;
     if (posBias) w *= posBias(e.slot.pos);
-    return Math.max(0.5, w);
+    // Soften the weighting so chances spread across a side rather than
+    // funnelling almost everything through one player.
+    return Math.max(0.5, Math.pow(Math.max(0.5, w), 0.82));
   });
 }
 
@@ -423,7 +425,8 @@ function makeChance(state, side, opp, type, forcedShooter = null) {
 
   // Chances in the box can be upgraded into penalties.
   if (type === 'open' && state.rng.chance(P.penaltyPerChance * (1 + quality))) {
-    const taker = side.tactic.penaltyTaker
+    // The designated taker usually steps up, but not always.
+    const taker = side.tactic.penaltyTaker && state.rng.chance(0.8)
       ? side.onPitch.find((e) => e.player.id === side.tactic.penaltyTaker)
       : null;
     const pen = { type: 'penalty', quality: P.penaltyQuality, shooter: taker || shooter, assister: null };
