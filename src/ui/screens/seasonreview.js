@@ -4,7 +4,6 @@ import { esc, openModal, money, badge, panelTight, emptyState } from '../compone
 import { userClub, sortTable } from '../../state/game.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { sortBy } from '../../core/util.js';
-import { currentAbility } from '../../data/attributes.js';
 
 export function showSeasonReview(app, summary, onContinue) {
   const game = app.game;

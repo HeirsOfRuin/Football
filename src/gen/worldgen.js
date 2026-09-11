@@ -2,7 +2,7 @@
 
 import { Rng, subRng } from '../core/rng.js';
 import { clamp, remap, sortBy } from '../core/util.js';
-import { NATIONS, NATION_BY_ID, LEAGUE_TEMPLATES, WORLD_SIZES, CONTINENTAL, SECONDARY_CONTINENTAL } from '../data/nations.js';
+import { NATION_BY_ID, LEAGUE_TEMPLATES, WORLD_SIZES, CONTINENTAL, SECONDARY_CONTINENTAL } from '../data/nations.js';
 import { defaultTactic } from '../data/tactics.js';
 import { currentAbility } from '../data/attributes.js';
 import { makeCityNamer, makeClubNamer, shortenClubName, clubCode, makeStadiumName, makeManagerName } from './names.js';

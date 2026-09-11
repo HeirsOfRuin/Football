@@ -2,8 +2,8 @@
 
 import { esc, panel, panelTight, money, emptyState, kv, raw, shortDate, toast, bar } from '../components.js';
 import { userClub } from '../../state/game.js';
-import { weeklyWageBill, wageBudgetUsage, financialHealth, adjustBudgets } from '../../engine/finance.js';
-import { sortBy, clamp } from '../../core/util.js';
+import { wageBudgetUsage, financialHealth, adjustBudgets } from '../../engine/finance.js';
+import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 
 export function render(app) {

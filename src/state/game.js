@@ -2,30 +2,20 @@
 
 import { Rng, subRng } from '../core/rng.js';
 import { clamp, remap, sortBy, money } from '../core/util.js';
-import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, formatDay, dayToDate } from '../core/calendar.js';
-import { generateWorld, squadStrength, injectCustomPlayers } from '../gen/worldgen.js';
+import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, dayToDate } from '../core/calendar.js';
+import { generateWorld, squadStrength } from '../gen/worldgen.js';
 import { generatePlayer, emptyStats, estimateValue } from '../gen/playergen.js';
 import { currentAbility } from '../data/attributes.js';
-import { defaultTactic } from '../data/tactics.js';
-import { simulateMatch, beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
-import { autoPick, autoAssignSpecialists, buildLineup } from '../engine/lineup.js';
+import { beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
+import { autoPick, autoAssignSpecialists } from '../engine/lineup.js';
 import {
   buildLeagueSchedule, scheduleDomesticCup, openNextCupRound, scheduleContinental,
   seedContinental, continentalKnockout, openContinentalRound, sortTable, applyResultToTable,
   emptyTableRow, resolveTie, resetFixtureCounter, leagueZones,
 } from '../engine/season.js';
-import {
-  applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets,
-  payLeaguePrize, payCompetitionPrize, matchdayAttendance,
-} from '../engine/finance.js';
-import {
-  trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary,
-  generateYouthIntake, expectedRole, refreshSquadThresholds,
-} from '../engine/training.js';
-import {
-  aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand,
-  renewContract, releasePlayer, completeTransfer,
-} from '../engine/transfers.js';
+import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize } from '../engine/finance.js';
+import { trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds } from '../engine/training.js';
+import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping } from '../engine/ai.js';
 import { news, matchHeadline } from '../engine/news.js';
 
@@ -330,6 +320,8 @@ export function finishFixture(game, fixture, state) {
     }
   }
 
+  reportNotableResult(game, fixture, state, home, away);
+
   game.lastResults.unshift({
     day: game.day, comp: fixture.compName, round: fixture.round,
     home: home.short, away: away.short, hg: state.result.homeGoals, ag: state.result.awayGoals,
@@ -338,6 +330,28 @@ export function finishFixture(game, fixture, state) {
   if (game.lastResults.length > 60) game.lastResults.length = 60;
 
   return state;
+}
+
+/**
+ * The press cover results in the manager's own division: thrashings, and any
+ * time a smaller side turns one over.
+ */
+function reportNotableResult(game, fixture, state, home, away) {
+  const user = userClub(game);
+  if (!user || user.leagueId !== home.leagueId) return;
+  if (fixture.homeId === user.id || fixture.awayId === user.id) return;
+  const hg = state.result.homeGoals;
+  const ag = state.result.awayGoals;
+  const margin = Math.abs(hg - ag);
+  const winner = hg > ag ? home : ag > hg ? away : null;
+  const loser = winner === home ? away : home;
+  const upset = winner ? winner.rep < loser.rep - 14 : false;
+  if (margin < 4 && !upset) return;
+  if (!game.rng.chance(0.5)) return;
+  const rng = subRng(game.rng, `headline:${fixture.id}`);
+  news(game, 'media', matchHeadline(rng, home, away, hg, ag, upset),
+    `${home.name} ${hg}-${ag} ${away.name} at ${home.stadium.name}, in front of ${state.result.attendance.toLocaleString()}.`,
+    { fixtureId: fixture.id });
 }
 
 function decideNeedsWinner(game, fixture, state) {
@@ -592,17 +606,30 @@ function publishTransferDigest(game) {
 function runYouthIntake(game, rng) {
   const world = game.world;
   for (const club of Object.values(world.clubs)) {
-    const intake = generateYouthIntake(rng, world, club, world.year, generatePlayer, null);
+    const all = generateYouthIntake(rng, world, club, world.year, generatePlayer, null);
+    // Only as many scholars as there is room for — otherwise squads grow without
+    // bound, season after season, until the list is unmanageable.
+    const room = Math.max(0, 32 - club.squad.length);
+    const intake = all.slice(0, room);
+    const turnedAway = all.length - intake.length;
     for (const p of intake) {
       world.players[p.id] = p;
       club.squad.push(p.id);
       const taken = new Set(club.squad.map((id) => world.players[id]?.squadNumber).filter(Boolean));
       for (let n = 30; n <= 70; n++) if (!taken.has(n)) { p.squadNumber = n; break; }
     }
-    if (club.isUserClub && intake.length) {
-      const best = sortBy(intake, { key: (p) => p.pa, desc: true })[0];
-      news(game, 'youth', 'Youth intake arrives',
-        `${intake.length} young players have joined the academy. The staff are most excited about ${best.name}, a ${best.age}-year-old ${best.positions[0]}.`);
+    if (club.isUserClub) {
+      if (intake.length) {
+        const best = sortBy(intake, { key: (p) => p.pa, desc: true })[0];
+        news(game, 'youth', 'Youth intake arrives',
+          `${intake.length} young players have joined the academy. The staff are most excited about ${best.name}, `
+          + `a ${best.age}-year-old ${best.positions[0]}.`
+          + (turnedAway ? ` ${turnedAway} more were not offered scholarships — there is no room in the squad for them.` : ''));
+      } else if (turnedAway) {
+        news(game, 'youth', 'No youth intake this year',
+          `The academy produced ${turnedAway} candidates, but with ${club.squad.length} players already registered there was no room `
+          + 'for any of them. Trim the squad if you want next year\'s crop.');
+      }
     }
   }
 }

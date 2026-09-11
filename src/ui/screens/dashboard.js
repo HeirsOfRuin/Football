@@ -1,16 +1,11 @@
 // The home screen: what happened, what is next, what needs attention.
 
-import {
-  esc, panel, panelTight, badge, money, formRun, stars, emptyState, kv, raw,
-  shortDate, moraleLabel, ratingCell,
-} from '../components.js';
+import { esc, panel, panelTight, badge, money, formRun, emptyState, kv, raw, shortDate, ratingCell } from '../components.js';
 import { userClub, nextFixtureFor, clubFixtures, sortTable } from '../../state/game.js';
-import { currentAbility } from '../../data/attributes.js';
 import { squadStrength } from '../../gen/worldgen.js';
-import { sortBy, remap } from '../../core/util.js';
+import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { wageBudgetUsage, financialHealth } from '../../engine/finance.js';
-import { transferWindowOpen } from '../../core/calendar.js';
 
 export function render(app) {
   const game = app.game;

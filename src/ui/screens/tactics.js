@@ -1,17 +1,15 @@
 // Tactics: formation, personnel, roles, duties and team instructions.
 
-import {
-  esc, panel, panelTight, money, toast, emptyState, openModal, stars, conditionCell, moraleLabel,
-} from '../components.js';
+import { esc, panel, panelTight, toast, emptyState, openModal, conditionCell, moraleLabel } from '../components.js';
 import { userClub } from '../../state/game.js';
 import {
   FORMATIONS, FORMATION_NAMES, MENTALITIES, INSTRUCTION_DEFS, ROLES,
   rolesForPosition, defaultRoleFor, defaultDutyFor, defaultTactic,
 } from '../../data/tactics.js';
 import { buildLineup, autoPick, autoAssignSpecialists, slotScore, isAvailable } from '../../engine/lineup.js';
-import { abilityForPosition, familiarity, familiarityLabel, currentAbility, POSITION_LABELS } from '../../data/attributes.js';
+import { familiarity, familiarityLabel, currentAbility, POSITION_LABELS } from '../../data/attributes.js';
 import { teamStrength } from '../../engine/ratings.js';
-import { sortBy, clamp } from '../../core/util.js';
+import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 
 export function render(app) {

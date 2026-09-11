@@ -1,10 +1,10 @@
 // Club screen: board, facilities, training and history.
 
-import { esc, panel, panelTight, money, emptyState, kv, raw, tabs, toast, badge, bar } from '../components.js';
+import { esc, panel, panelTight, emptyState, kv, raw, tabs, toast, badge, bar } from '../components.js';
 import { userClub } from '../../state/game.js';
 import { TRAINING_FOCUSES, TRAINING_INTENSITY, expectedRole, ROLE_LABELS, developmentRate } from '../../engine/training.js';
 import { currentAbility } from '../../data/attributes.js';
-import { sortBy, remap } from '../../core/util.js';
+import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { squadStrength } from '../../gen/worldgen.js';
 

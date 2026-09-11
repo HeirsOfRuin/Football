@@ -1,6 +1,6 @@
 // Fixtures and results for the user's club, plus a match report viewer.
 
-import { esc, panelTight, emptyState, shortDate, openModal, badge, money, tabs, ratingCell } from '../components.js';
+import { esc, panelTight, emptyState, shortDate, openModal, badge, tabs, ratingCell } from '../components.js';
 import { userClub, clubFixtures } from '../../state/game.js';
 import { showPlayer } from '../playerProfile.js';
 import { sortBy } from '../../core/util.js';

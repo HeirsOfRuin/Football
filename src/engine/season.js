@@ -1,9 +1,8 @@
 // Season scheduling: league fixtures, domestic cups and continental competition.
 
-import { Rng, subRng } from '../core/rng.js';
-import { SEASON_DAYS, KEY_DAYS, dayToDate } from '../core/calendar.js';
+import { subRng } from '../core/rng.js';
+import { KEY_DAYS } from '../core/calendar.js';
 import { sortBy, clamp } from '../core/util.js';
-import { squadStrength } from '../gen/worldgen.js';
 
 /** Circle-method round robin. Returns rounds of [homeId, awayId] pairs. */
 export function roundRobin(teamIds, rng) {

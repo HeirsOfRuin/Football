@@ -20,6 +20,10 @@ python3 -m http.server 8080     # or: npx serve, or any static server
 
 Then open <http://localhost:8080>.
 
+Press **Space** to continue — it advances the calendar, and starts or pauses a match.
+Settings in the sidebar control whether Continue skips ahead to the next thing that needs
+you or moves one day at a time, plus default match speed and autosave.
+
 ```bash
 npm test          # 1,287 assertions: generation, scheduling, match rates, a full season, saves
 npm run season    # simulate whole seasons headlessly and print tables, scorers, transfers
@@ -167,5 +171,8 @@ in localStorage. Both export to JSON files.
 - **No press conferences or individual player conversations.** Morale responds to results,
   playing time, contract situation and team talks only.
 - **One save slot per career by default**, with autosave; export a file to keep more.
+- **Youth intake is capped by squad room.** A club that already has 32 registered players
+  offers no scholarships that year, which keeps squads from growing season on season but
+  means you have to trim if you want the next crop.
 - **Simulating a full season takes 15-20 seconds** on a small world. Day-to-day play is
   instant; only skipping a whole season at once is slow.

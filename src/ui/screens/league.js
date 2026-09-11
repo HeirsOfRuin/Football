@@ -1,6 +1,6 @@
 // Competitions: league tables, cup brackets and continental groups.
 
-import { esc, panelTight, panel, badge, emptyState, formRun, tabs, ratingCell, shortDate } from '../components.js';
+import { esc, panelTight, panel, badge, emptyState, formRun, ratingCell } from '../components.js';
 import { userClub, sortTable } from '../../state/game.js';
 import { leagueZones } from '../../engine/season.js';
 import { sortBy } from '../../core/util.js';

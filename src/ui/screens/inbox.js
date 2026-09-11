@@ -1,6 +1,6 @@
 // The manager's inbox.
 
-import { esc, panelTight, emptyState, shortDate, tabs, toast } from '../components.js';
+import { esc, panelTight, emptyState, shortDate, tabs } from '../components.js';
 import { NEWS_CATEGORIES, markAllRead } from '../../engine/news.js';
 import { showMatchReport } from './fixtures.js';
 import { showPlayer } from '../playerProfile.js';

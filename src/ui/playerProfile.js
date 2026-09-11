@@ -1,13 +1,11 @@
 // The player profile modal — reachable from every screen that lists players.
 
-import {
-  esc, openModal, money, stars, bar, moraleLabel, attrClass, toast, confirmDialog, kv, raw,
-} from './components.js';
+import { esc, openModal, money, stars, moraleLabel, attrClass, toast, confirmDialog, kv, raw } from './components.js';
 import { ATTR_GROUPS, ATTR_LABELS, POSITIONS, POSITION_LABELS, currentAbility, abilityForPosition, familiarity, familiarityLabel } from '../data/attributes.js';
 import { TRAITS } from '../gen/playergen.js';
 import { expectedRole, ROLE_LABELS, developmentRate } from '../engine/training.js';
-import { marketValue, askingPrice, contractDemand, scoutReport } from '../engine/transfers.js';
-import { sortBy, remap, clamp } from '../core/util.js';
+import { marketValue, askingPrice, scoutReport } from '../engine/transfers.js';
+import { sortBy } from '../core/util.js';
 import { subRng } from '../core/rng.js';
 import { abilityTier } from '../state/library.js';
 

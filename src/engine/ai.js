@@ -2,7 +2,7 @@
 
 import { autoPick, autoAssignSpecialists } from './lineup.js';
 import { squadStrength } from '../gen/worldgen.js';
-import { clamp, remap, sortBy } from '../core/util.js';
+import { clamp, remap } from '../core/util.js';
 import { currentAbility } from '../data/attributes.js';
 import { FORMATION_NAMES, MENTALITIES, defaultTactic } from '../data/tactics.js';
 import { makeManagerName } from '../gen/names.js';

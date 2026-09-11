@@ -1,11 +1,11 @@
 // Application shell: navigation, the Continue loop, saving and screen routing.
 
-import { newGame, advanceDay, endSeason, rolloverSeason, userClub, nextFixtureFor, playFixture, sackManager, availableJobs, takeOverClub } from '../state/game.js';
-import { SEASON_DAYS, KEY_DAYS, formatDay, transferWindowOpen } from '../core/calendar.js';
-import { saveGame, loadGame, listSaves, deleteSave, loadSettings, saveSettings, exportGameFile, importGameFile } from '../state/store.js';
+import { newGame, advanceDay, endSeason, rolloverSeason, userClub, nextFixtureFor, sackManager, availableJobs, takeOverClub } from '../state/game.js';
+import { SEASON_DAYS, formatDay, transferWindowOpen } from '../core/calendar.js';
+import { saveGame, loadGame, loadSettings, saveSettings, exportGameFile } from '../state/store.js';
 import { unreadCount } from '../engine/news.js';
 import { money } from '../core/util.js';
-import { badge, toast, closeAllModals, esc, confirmDialog } from './components.js';
+import { badge, toast, closeAllModals, esc, openModal } from './components.js';
 
 import * as menuScreen from './screens/menu.js';
 import * as libraryScreen from './screens/library.js';
@@ -124,6 +124,7 @@ export const app = {
   }).join('')}
           <div class="nav-sep"></div>
           <div class="nav-item" data-action="save"><span class="lbl">Save</span></div>
+          <div class="nav-item" data-action="settings"><span class="lbl">Settings</span></div>
           <div class="nav-item" data-nav="menu"><span class="lbl">Main Menu</span></div>
         </nav>
       </aside>
@@ -135,7 +136,7 @@ export const app = {
           ${club ? `<div class="stat">Balance<b>${money(club.finances.balance)}</b></div>
           <div class="stat">Transfer budget<b>${money(club.finances.transferBudget)}</b></div>` : ''}
           ${next && opponent ? `<div class="stat">Next<b>${next.homeId === club.id ? 'v' : 'at'} ${esc(opponent.short)}</b></div>` : ''}
-          <button class="primary" data-action="continue" ${this.busy ? 'disabled' : ''}>${next && next.day === game.day ? 'Play Match' : 'Continue'}</button>
+          <button class="primary" data-action="continue" title="Space" ${this.busy ? 'disabled' : ''}>${next && next.day === game.day ? 'Play Match' : 'Continue'}</button>
         </header>
         <div class="content ${view.noPad ? 'no-pad' : ''}">${view.html}</div>
       </main>
@@ -150,6 +151,57 @@ export const app = {
     if (cont) cont.addEventListener('click', () => this.advance());
     const save = root.querySelector('[data-action="save"]');
     if (save) save.addEventListener('click', () => this.save());
+    const settings = root.querySelector('[data-action="settings"]');
+    if (settings) settings.addEventListener('click', () => this.showSettings());
+  },
+
+  /** Space advances the calendar — the action this game asks for most often. */
+  bindKeys() {
+    if (this._keysBound) return;
+    this._keysBound = true;
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== ' ' && e.key !== 'Spacebar') return;
+      const el = document.activeElement;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+      if (document.querySelector('.modal-backdrop')) return;
+      if (!this.game || this.screen === 'menu' || this.screen === 'library') return;
+      e.preventDefault();
+      if (this.screen === 'match') {
+        const play = document.getElementById('m-play');
+        if (play) play.click();
+        return;
+      }
+      const cont = document.querySelector('[data-action="continue"]');
+      if (cont && !cont.disabled) cont.click();
+    });
+  },
+
+  showSettings() {
+    const s = this.settings;
+    openModal({
+      title: 'Settings',
+      narrow: true,
+      body: `
+        <div class="field"><label>Continue button</label><select id="set-pace">
+          <option value="skip" ${s.dayAtATime ? '' : 'selected'}>Advance to the next thing that needs you</option>
+          <option value="day" ${s.dayAtATime ? 'selected' : ''}>Advance one day at a time</option>
+        </select></div>
+        <div class="field"><label>Default match speed</label><select id="set-speed">
+          ${['slow', 'normal', 'fast', 'instant'].map((k) => `<option value="${k}" ${(s.matchSpeed || 'normal') === k ? 'selected' : ''}>${k === 'instant' ? 'Skip to result' : k[0].toUpperCase() + k.slice(1)}</option>`).join('')}
+        </select></div>
+        <div class="field"><label><input type="checkbox" id="set-autosave" ${s.autosave === false ? '' : 'checked'}> Autosave after each match and each day</label></div>
+        <p class="small faint">Press <b>Space</b> to continue, or to start and pause a match.</p>`,
+      footer: '<button data-act="export">Export save file</button><button class="primary" data-close>Done</button>',
+      onMount: (modal) => {
+        modal.querySelector('#set-pace').onchange = (e) => this.setSetting('dayAtATime', e.target.value === 'day');
+        modal.querySelector('#set-speed').onchange = (e) => this.setSetting('matchSpeed', e.target.value);
+        modal.querySelector('#set-autosave').onchange = (e) => this.setSetting('autosave', e.target.checked);
+        modal.querySelector('[data-act="export"]').onclick = () => {
+          exportGameFile(this.game);
+          toast('Save file downloaded.');
+        };
+      },
+    });
   },
 
   /** Advance the calendar until something needs the manager's attention. */
@@ -305,4 +357,5 @@ export const app = {
 };
 
 window.__touchline = app;
+app.bindKeys();
 app.render();

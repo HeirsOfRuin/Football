@@ -1,13 +1,11 @@
 // The live match view. The engine is steppable, so the manager can stop at any
 // minute to make a change, and must stop at half time for a team talk.
 
-import {
-  esc, badge, money, emptyState, openModal, toast, conditionCell, moraleLabel, ratingCell, panelTight,
-} from '../components.js';
-import { createMatchState, finishFixture, userClub } from '../../state/game.js';
+import { esc, badge, emptyState, openModal, toast, panelTight } from '../components.js';
+import { createMatchState, finishFixture } from '../../state/game.js';
 import { stepMatch, makeSubstitution, changeMentality, applyTeamTalk, TICKS_PER_HALF } from '../../engine/match.js';
-import { MENTALITIES, ROLES } from '../../data/tactics.js';
-import { currentAbility, POSITION_LABELS, familiarity, familiarityLabel } from '../../data/attributes.js';
+import { MENTALITIES } from '../../data/tactics.js';
+import { currentAbility } from '../../data/attributes.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 
@@ -76,6 +74,7 @@ export function render(app) {
       const clockEl = root.querySelector('#m-clock');
       const timelineEl = root.querySelector('#m-timeline');
       const playBtn = root.querySelector('#m-play');
+      const subBtn = root.querySelector('#m-sub');
       let renderedEvents = 0;
 
       const paint = () => {
@@ -92,6 +91,10 @@ export function render(app) {
         commentary.scrollTop = commentary.scrollHeight;
         timelineEl.innerHTML = state.events.filter((e) => e.type === 'goal')
           .map((e) => `<i class="${e.side}" style="left:${Math.min(99, (e.minute / 95) * 100)}%" title="${esc(e.text)}"></i>`).join('');
+        if (subBtn && userSide) {
+          subBtn.textContent = `Substitution (${userSide.subsUsed}/${userSide.subsAllowed})`;
+          subBtn.disabled = state.finished || userSide.subsUsed >= userSide.subsAllowed || !userSide.bench.length;
+        }
         sidePanel.innerHTML = sideHtml(state, userSide);
         sidePanel.querySelectorAll('[data-player]').forEach((el) => {
           el.onclick = () => { stop(); showPlayer(app, el.dataset.player); };

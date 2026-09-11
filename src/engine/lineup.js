@@ -2,7 +2,7 @@
 
 import { FORMATIONS, defaultRoleFor, defaultDutyFor, ROLES } from '../data/tactics.js';
 import { abilityForPosition, positionEffectiveness, currentAbility } from '../data/attributes.js';
-import { sortBy, clamp } from '../core/util.js';
+import { sortBy } from '../core/util.js';
 import { conditionMultiplier, roleSuitability } from './ratings.js';
 
 export function isAvailable(player) {

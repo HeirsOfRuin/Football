@@ -10,7 +10,6 @@ import { weeklyWageBill } from '../engine/finance.js';
 import { transferWindowOpen } from '../core/calendar.js';
 import { expectedRole, ROLE_LABELS } from '../engine/training.js';
 import { news } from '../engine/news.js';
-import { clamp } from '../core/util.js';
 
 const ROLE_OPTIONS = [
   { id: 'key', label: 'Key player' },

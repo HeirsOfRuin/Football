@@ -11,9 +11,9 @@
 
 import { Rng } from '../core/rng.js';
 import { clamp, remap, weightedAttrs } from '../core/util.js';
-import { teamStrength, keeperRating, computeMatchRating, traitEffects, conditionMultiplier } from './ratings.js';
+import { teamStrength, keeperRating, computeMatchRating, traitEffects } from './ratings.js';
 import { buildLineup } from './lineup.js';
-import { MENTALITY_EFFECT, instrIndex, ROLES } from '../data/tactics.js';
+import { instrIndex, ROLES } from '../data/tactics.js';
 import { POSITION_GROUP } from '../data/attributes.js';
 
 export const TICKS_PER_HALF = 90; // 90 ticks = 45 minutes

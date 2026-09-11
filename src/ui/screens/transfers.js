@@ -1,10 +1,8 @@
 // The transfer market: search the world, manage a shortlist, handle offers.
 
-import {
-  esc, panel, panelTight, money, emptyState, tabs, stars, toast, badge, shortDate, tableHead,
-} from '../components.js';
+import { esc, panel, panelTight, money, emptyState, tabs, shortDate, tableHead } from '../components.js';
 import { userClub } from '../../state/game.js';
-import { currentAbility, POSITIONS, POSITION_LABELS, abilityForPosition, positionEffectiveness } from '../../data/attributes.js';
+import { currentAbility, POSITIONS, POSITION_LABELS, positionEffectiveness } from '../../data/attributes.js';
 import { marketValue, askingPrice, identifyNeed } from '../../engine/transfers.js';
 import { weeklyWageBill } from '../../engine/finance.js';
 import { transferWindowOpen } from '../../core/calendar.js';

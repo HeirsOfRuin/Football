@@ -2,11 +2,7 @@
 // dropped into any future campaign.
 
 import { html, esc, toast, money, openModal, confirmDialog, attrClass } from '../components.js';
-import {
-  listLibrary, saveToLibrary, deleteFromLibrary, duplicateInLibrary, blankCustomPlayer,
-  randomCustomPlayer, validateCustomPlayer, describeCustomPlayer, exportLibraryFile,
-  importLibraryFile, abilityTier, NATION_OPTIONS,
-} from '../../state/library.js';
+import { listLibrary, saveToLibrary, deleteFromLibrary, duplicateInLibrary, blankCustomPlayer, randomCustomPlayer, validateCustomPlayer, describeCustomPlayer, exportLibraryFile, importLibraryFile, NATION_OPTIONS } from '../../state/library.js';
 import { ATTR_GROUPS, ATTR_LABELS, HIDDEN_ATTRS, POSITIONS, POSITION_LABELS } from '../../data/attributes.js';
 import { TRAITS } from '../../gen/playergen.js';
 import { sortBy } from '../../core/util.js';

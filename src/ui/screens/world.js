@@ -1,7 +1,7 @@
 // Browse any club in the world: squad, fixtures and standing.
 
-import { esc, panel, panelTight, badge, money, emptyState, formRun, kv, stars, shortDate } from '../components.js';
-import { userClub, sortTable, clubFixtures } from '../../state/game.js';
+import { esc, panel, panelTight, badge, money, emptyState, formRun, kv, shortDate } from '../components.js';
+import { sortTable, clubFixtures } from '../../state/game.js';
 import { currentAbility } from '../../data/attributes.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { sortBy } from '../../core/util.js';

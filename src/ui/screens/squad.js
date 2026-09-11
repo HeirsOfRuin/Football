@@ -1,14 +1,11 @@
 // Squad list with sortable columns, plus views for contracts and development.
 
-import {
-  esc, panelTight, money, stars, emptyState, tableHead, SQUAD_COLUMNS, sortValue,
-  playerRow, conditionCell, moraleLabel, ratingCell, tabs, toast, bar,
-} from '../components.js';
+import { esc, panelTight, money, emptyState, tableHead, SQUAD_COLUMNS, sortValue, playerRow, moraleLabel, ratingCell, tabs, bar } from '../components.js';
 import { userClub } from '../../state/game.js';
 import { currentAbility, POSITION_GROUP } from '../../data/attributes.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
-import { expectedRole, ROLE_LABELS, developmentRate, TRAINING_FOCUSES } from '../../engine/training.js';
+import { expectedRole, ROLE_LABELS, developmentRate } from '../../engine/training.js';
 import { squadDepth } from '../../engine/lineup.js';
 import { marketValue } from '../../engine/transfers.js';
 import { weeklyWageBill } from '../../engine/finance.js';
