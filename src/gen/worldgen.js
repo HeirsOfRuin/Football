@@ -1,0 +1,450 @@
+// World generation: nations -> leagues -> clubs -> squads -> staff -> finances.
+
+import { Rng, subRng } from '../core/rng.js';
+import { clamp, remap, sortBy } from '../core/util.js';
+import { NATIONS, NATION_BY_ID, LEAGUE_TEMPLATES, WORLD_SIZES, CONTINENTAL, SECONDARY_CONTINENTAL } from '../data/nations.js';
+import { defaultTactic } from '../data/tactics.js';
+import { currentAbility } from '../data/attributes.js';
+import { makeCityNamer, makeClubNamer, shortenClubName, clubCode, makeStadiumName, makeManagerName } from './names.js';
+import { generatePlayer, estimateWage, estimateValue, resetPlayerCounter, emptyStats } from './playergen.js';
+
+const KIT_COLOURS = [
+  ['#d62828', '#ffffff'], ['#003049', '#f5f5f5'], ['#1b4332', '#ffd60a'], ['#5a189a', '#ffffff'],
+  ['#0b5394', '#e8e8e8'], ['#8d0801', '#f4d58d'], ['#023047', '#fb8500'], ['#212529', '#f8f9fa'],
+  ['#006d77', '#edf6f9'], ['#7f5539', '#f0ead2'], ['#432818', '#ffe6a7'], ['#14213d', '#fca311'],
+  ['#2b2d42', '#edf2f4'], ['#606c38', '#fefae0'], ['#9d0208', '#ffba08'], ['#3a0ca3', '#4cc9f0'],
+  ['#b5179e', '#f1faee'], ['#1d3557', '#a8dadc'], ['#e63946', '#1d3557'], ['#f77f00', '#003049'],
+];
+
+/** Positional make-up of a generated squad. */
+const SQUAD_TEMPLATE = [
+  'GK', 'GK', 'GK',
+  'DC', 'DC', 'DC', 'DC', 'DL', 'DL', 'DR', 'DR',
+  'DM', 'DM', 'MC', 'MC', 'MC', 'MC', 'ML', 'MR',
+  'AML', 'AMR', 'AMC', 'AMC',
+  'ST', 'ST', 'ST',
+];
+
+/** Relative ability of each squad slot, best to worst. */
+const SQUAD_QUALITY_CURVE = [
+  1.07, 1.055, 1.045, 1.035, 1.025, 1.015, 1.005, 0.995, 0.985, 0.975, 0.965,
+  0.94, 0.925, 0.91, 0.895, 0.88, 0.865,
+  0.835, 0.81, 0.785, 0.755,
+  0.71, 0.67, 0.63, 0.58, 0.53,
+];
+
+function ageForSlot(rng, index) {
+  // A realistic age pyramid: prime-age core, a few veterans, a few prospects.
+  const roll = rng.next();
+  if (index < 11) {
+    if (roll < 0.1) return rng.int(19, 21);
+    if (roll < 0.75) return rng.int(23, 29);
+    if (roll < 0.92) return rng.int(30, 33);
+    return rng.int(21, 23);
+  }
+  if (roll < 0.3) return rng.int(17, 20);
+  if (roll < 0.75) return rng.int(21, 27);
+  if (roll < 0.92) return rng.int(28, 32);
+  return rng.int(33, 36);
+}
+
+function pickNationality(rng, homeNationId, clubRep, worldNations) {
+  const foreignChance = remap(clubRep, 30, 95, 0.06, 0.55);
+  if (!rng.chance(foreignChance)) return homeNationId;
+  const others = worldNations.filter((n) => n !== homeNationId);
+  if (!others.length) return homeNationId;
+  return rng.weighted(others, (id) => {
+    const n = NATION_BY_ID[id];
+    // Rich leagues import from strong-production, lower-wealth nations.
+    return Math.pow(n.youthRep / 100, 2.2) * (1.4 - n.wealth * 0.6) * 10;
+  });
+}
+
+/** Potential ability for a newly generated player. */
+function rollPotential(rng, nationId, clubRep, age, targetCA) {
+  const nation = NATION_BY_ID[nationId];
+  const ceiling = remap(clubRep, 25, 95, 120, 190) + remap(nation.youthRep, 60, 98, -6, 10);
+  let pa = rng.normalClamped(targetCA + remap(age, 16, 30, 34, 2), 16, targetCA, 200);
+  pa = Math.min(pa, ceiling + rng.normalClamped(0, 9, -18, 22));
+  return clamp(Math.round(Math.max(pa, targetCA)), targetCA, 200);
+}
+
+function makeContract(rng, player, club, year, ca) {
+  const years = player.age >= 33 ? rng.int(1, 2) : player.age <= 21 ? rng.int(2, 5) : rng.int(1, 4);
+  const nation = NATION_BY_ID[club.nation];
+  const wage = estimateWage(ca, player.age, club.rep, nation.wealth);
+  return {
+    wage: Math.round(wage * rng.range(0.85, 1.18)),
+    expiresYear: year + years,
+    signedYear: year,
+    releaseClause: rng.chance(0.16) ? Math.round(player.value * rng.range(1.6, 3.2)) : 0,
+    goalBonus: rng.chance(0.3) ? Math.round(wage * rng.range(0.3, 1.2)) : 0,
+    appearanceFee: rng.chance(0.35) ? Math.round(wage * rng.range(0.05, 0.25)) : 0,
+    loanedFrom: null,
+    loanUntilYear: null,
+  };
+}
+
+function generateManager(rng, nationId, clubRep) {
+  const n = makeManagerName(rng, nationId);
+  const q = remap(clubRep, 25, 95, 6, 17);
+  const roll = (bias = 0) => clamp(Math.round(rng.normalClamped(q + bias, 3.2, 1, 20)), 1, 20);
+  return {
+    name: n.full,
+    nat: nationId,
+    style: n.style,
+    attacking: roll(n.style === 'Idealist' ? 3 : 0),
+    defending: roll(n.style === 'Pragmatist' ? 3 : 0),
+    tactical: roll(n.style === 'Tactician' ? 4 : 0),
+    manManagement: roll(n.style === 'Motivator' ? 4 : 0),
+    youthDev: roll(n.style === 'Youth Developer' ? 5 : 0),
+    discipline: roll(n.style === 'Disciplinarian' ? 4 : 0),
+    reputation: Math.round(remap(clubRep, 25, 95, 20, 92) + rng.normalClamped(0, 6, -14, 14)),
+    yearsAtClub: rng.int(0, 6),
+  };
+}
+
+function financesForClub(rng, club, league, nation) {
+  const rep = club.rep;
+  const capacity = club.stadium.capacity;
+  const ticketPrice = Math.round(remap(rep, 25, 95, 14, 58) * (0.7 + nation.wealth * 0.5));
+  const attendPct = remap(rep, 25, 95, 0.62, 0.96);
+  const homeGames = Math.max(8, Math.round((league.teams - 1)));
+  const matchday = capacity * attendPct * ticketPrice * homeGames;
+  const tvShare = league.tvMoney * remap(rep, league.rep - 20, league.rep + 8, 0.6, 1.5) / league.teams;
+  const commercial = Math.pow(rep / 95, 3.2) * 190e6 * nation.wealth + 400e3;
+  const income = matchday + tvShare + commercial;
+
+  const wageBudgetAnnual = income * rng.range(0.5, 0.68);
+  const balance = Math.round(income * rng.range(0.04, 0.3) - (rng.chance(0.22) ? income * rng.range(0.05, 0.35) : 0));
+  return {
+    balance,
+    ticketPrice,
+    capacityUse: attendPct,
+    incomeEstimate: Math.round(income),
+    wageBudgetAnnual: Math.round(wageBudgetAnnual),
+    transferBudget: Math.max(0, Math.round(income * rng.range(0.03, 0.22))),
+    seasonSpend: 0,
+    seasonIncome: 0,
+    debt: balance < 0 ? -balance : 0,
+    ledger: [],
+  };
+}
+
+export function generateWorld(opts = {}) {
+  const {
+    seed = Date.now(), size = 'medium', year = 2025, customPlayers = [], customPlacement = 'free',
+  } = opts;
+  const rng = new Rng(seed);
+  resetPlayerCounter();
+
+  const nationIds = WORLD_SIZES[size]?.nations || WORLD_SIZES.medium.nations;
+  const leagues = LEAGUE_TEMPLATES.filter((l) => nationIds.includes(l.nation)).map((l) => ({
+    ...l,
+    clubIds: [],
+    table: null,
+    fixtures: [],
+    season: year,
+    history: [],
+  }));
+
+  const world = {
+    seed,
+    size,
+    year,
+    nations: nationIds.map((id) => ({ ...NATION_BY_ID[id] })),
+    leagues,
+    clubs: {},
+    players: {},
+    freeAgents: [],
+    competitions: {},
+  };
+
+  const takenCodes = new Set();
+  let clubCounter = 0;
+
+  for (const nationId of nationIds) {
+    const nation = NATION_BY_ID[nationId];
+    const nRng = subRng(rng, `nation:${nationId}`);
+    const cityNamer = makeCityNamer(nRng, nationId);
+    const clubNamer = makeClubNamer(nRng, nationId);
+    const nationLeagues = leagues.filter((l) => l.nation === nationId);
+
+    for (const league of nationLeagues) {
+      // Reputation spread inside a division: a couple of giants, a long tail.
+      const reps = [];
+      for (let i = 0; i < league.teams; i++) {
+        const t = i / Math.max(1, league.teams - 1);
+        const base = league.rep + 10 - Math.pow(t, 0.75) * 30;
+        reps.push(clamp(base + nRng.normalClamped(0, 3.2, -8, 8), 18, 99));
+      }
+      reps.sort((a, b) => b - a);
+
+      for (let i = 0; i < league.teams; i++) {
+        const city = cityNamer();
+        const name = clubNamer(city);
+        const rep = Math.round(reps[i]);
+        const [primary, secondary] = nRng.pick(KIT_COLOURS);
+        const capacity = Math.round(remap(rep, 20, 95, 3800, 74000) * nRng.range(0.78, 1.3) / 500) * 500;
+        const club = {
+          id: `c${(++clubCounter).toString(36)}`,
+          name,
+          short: shortenClubName(name),
+          code: clubCode(name, takenCodes),
+          nation: nationId,
+          leagueId: league.id,
+          city,
+          founded: nRng.int(1878, 1974),
+          rep,
+          colours: { primary, secondary },
+          stadium: { name: makeStadiumName(nRng, nationId, city), capacity },
+          squad: [],
+          tactic: defaultTactic(nRng.pick(['4-4-2', '4-2-3-1', '4-3-3', '4-1-4-1', '3-5-2', '4-4-2 Diamond'])),
+          manager: generateManager(nRng, nationId, rep),
+          facilities: {
+            training: clamp(Math.round(remap(rep, 25, 95, 4, 19) + nRng.normalClamped(0, 2.4, -5, 5)), 1, 20),
+            youth: clamp(Math.round(remap(rep, 25, 95, 4, 18) + nRng.normalClamped(0, 3, -6, 6)), 1, 20),
+            scouting: clamp(Math.round(remap(rep, 25, 95, 3, 18) + nRng.normalClamped(0, 2.8, -6, 6)), 1, 20),
+            medical: clamp(Math.round(remap(rep, 25, 95, 4, 19) + nRng.normalClamped(0, 2.4, -5, 5)), 1, 20),
+          },
+          coaching: {
+            attacking: clamp(Math.round(remap(rep, 25, 95, 5, 18) + nRng.normalClamped(0, 2.6, -5, 5)), 1, 20),
+            defending: clamp(Math.round(remap(rep, 25, 95, 5, 18) + nRng.normalClamped(0, 2.6, -5, 5)), 1, 20),
+            fitness: clamp(Math.round(remap(rep, 25, 95, 5, 18) + nRng.normalClamped(0, 2.6, -5, 5)), 1, 20),
+            gk: clamp(Math.round(remap(rep, 25, 95, 5, 18) + nRng.normalClamped(0, 2.6, -5, 5)), 1, 20),
+          },
+          trainingFocus: 'Balanced',
+          board: {
+            expectation: null,
+            confidence: nRng.int(55, 85),
+            patience: nRng.int(40, 85),
+            wantsYouth: nRng.chance(0.35),
+            wantsAttacking: nRng.chance(0.3),
+          },
+          finances: null,
+          form: [],
+          history: [],
+          morale: 70,
+          isUserClub: false,
+        };
+        club.finances = financesForClub(nRng, club, league, nation);
+        club.board.expectation = boardExpectation(i, league.teams, league.tier);
+
+        // --- Squad ---
+        const baseCA = remap(rep, 20, 99, 52, 156);
+        const template = nRng.shuffle([...SQUAD_TEMPLATE]);
+        // Keep goalkeepers first so the quality curve gives the club a real No.1.
+        template.sort((a, b) => (a === 'GK' ? -1 : b === 'GK' ? 1 : 0));
+        const order = [];
+        // Interleave: spread the GKs across the curve instead of clumping.
+        const gks = template.filter((p) => p === 'GK');
+        const outfield = nRng.shuffle(template.filter((p) => p !== 'GK'));
+        order.push(gks[0]);
+        outfield.slice(0, 10).forEach((p) => order.push(p));
+        order.push(gks[1]);
+        outfield.slice(10).forEach((p) => order.push(p));
+        order.push(gks[2]);
+
+        for (let s = 0; s < order.length; s++) {
+          const pos = order[s];
+          const curve = SQUAD_QUALITY_CURVE[Math.min(s, SQUAD_QUALITY_CURVE.length - 1)];
+          const age = ageForSlot(nRng, s);
+          let targetCA = baseCA * curve + nRng.normalClamped(0, 5, -13, 13);
+          // Young players in the squad are not yet at their level.
+          if (age <= 20) targetCA *= remap(age, 16, 21, 0.7, 0.95);
+          targetCA = clamp(Math.round(targetCA), 20, 198);
+          const natId = pickNationality(nRng, nationId, rep, nationIds);
+          const pa = rollPotential(nRng, natId, rep, age, targetCA);
+          const player = generatePlayer(nRng, {
+            nationId: natId, pos, age, targetCA, targetPA: pa,
+            clubRep: rep, leagueRep: league.rep, year,
+          });
+          player.clubId = club.id;
+          player.contract = makeContract(nRng, player, club, year, targetCA);
+          world.players[player.id] = player;
+          club.squad.push(player.id);
+        }
+        assignSquadNumbers(nRng, club, world);
+        club.finances.wageBudgetAnnual = Math.max(
+          club.finances.wageBudgetAnnual,
+          Math.round(club.squad.reduce((a, id) => a + world.players[id].contract.wage, 0) * 52 * 1.08),
+        );
+
+        league.clubIds.push(club.id);
+        world.clubs[club.id] = club;
+      }
+    }
+  }
+
+  // Free agents — a pool of unattached professionals for emergencies.
+  const faRng = subRng(rng, 'freeagents');
+  const faCount = Math.round(nationIds.length * 14);
+  for (let i = 0; i < faCount; i++) {
+    const natId = faRng.pick(nationIds);
+    const pos = faRng.pick(SQUAD_TEMPLATE);
+    const age = faRng.chance(0.45) ? faRng.int(31, 37) : faRng.int(19, 30);
+    const targetCA = clamp(Math.round(faRng.normalClamped(72, 18, 30, 135)), 25, 140);
+    const p = generatePlayer(faRng, {
+      nationId: natId, pos, age, targetCA, targetPA: rollPotential(faRng, natId, 45, age, targetCA),
+      clubRep: 45, leagueRep: 55, year,
+    });
+    p.contract = null;
+    p.transferStatus = 'none';
+    world.players[p.id] = p;
+    world.freeAgents.push(p.id);
+  }
+
+  if (customPlayers.length) injectCustomPlayers(world, customPlayers, customPlacement, subRng(rng, 'custom'), year);
+
+  buildCompetitions(world, rng);
+  world.rngState = rng.save();
+  return world;
+}
+
+function boardExpectation(rankIndex, teams, tier) {
+  const t = rankIndex / Math.max(1, teams - 1);
+  if (tier === 1) {
+    if (t < 0.1) return { type: 'title', label: 'Win the league' };
+    if (t < 0.25) return { type: 'top', target: 4, label: 'Qualify for the Continental Cup' };
+    if (t < 0.5) return { type: 'top', target: Math.ceil(teams * 0.4), label: 'Challenge for a continental place' };
+    if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.65), label: 'Finish in mid-table' };
+    return { type: 'survive', target: teams - 3, label: 'Avoid relegation' };
+  }
+  if (t < 0.2) return { type: 'top', target: 2, label: 'Win promotion' };
+  if (t < 0.45) return { type: 'top', target: 6, label: 'Reach the promotion play-offs' };
+  if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.6), label: 'Finish in mid-table' };
+  return { type: 'survive', target: teams - 3, label: 'Avoid relegation' };
+}
+
+const NUMBER_PRIORITY = {
+  GK: [1, 13, 25, 31], DC: [4, 5, 6, 3, 22, 15], DL: [3, 18, 33], DR: [2, 12, 24],
+  DM: [6, 14, 16, 28], MC: [8, 4, 16, 20, 23], ML: [11, 17, 27], MR: [7, 19, 26],
+  AML: [11, 10, 17], AMR: [7, 10, 21], AMC: [10, 21, 8], ST: [9, 19, 29, 20],
+};
+
+function assignSquadNumbers(rng, club, world) {
+  const taken = new Set();
+  const squad = club.squad.map((id) => world.players[id]);
+  for (const p of squad) {
+    const prefs = NUMBER_PRIORITY[p.positions[0]] || [];
+    let assigned = null;
+    for (const n of prefs) {
+      if (!taken.has(n)) { assigned = n; break; }
+    }
+    if (assigned === null) {
+      for (let n = 2; n <= 45; n++) if (!taken.has(n)) { assigned = n; break; }
+    }
+    taken.add(assigned);
+    p.squadNumber = assigned;
+  }
+}
+
+/**
+ * Custom players from the user's library are inserted into a fresh world.
+ * placement: 'free' (free agents), 'auto' (matched to a club of fitting level),
+ * or a specific clubId.
+ */
+export function injectCustomPlayers(world, customPlayers, placement, rng, year) {
+  const clubs = Object.values(world.clubs);
+  for (const template of customPlayers) {
+    const player = materialiseCustomPlayer(template, world, year);
+    world.players[player.id] = player;
+    let club = null;
+    if (placement && placement !== 'free' && placement !== 'auto') {
+      club = world.clubs[placement] || null;
+    } else if (placement === 'auto') {
+      const ca = currentAbility(player);
+      const candidates = clubs.filter((c) => Math.abs(remap(c.rep, 20, 99, 52, 156) - ca) < 18);
+      club = candidates.length ? rng.pick(candidates) : rng.pick(clubs);
+    }
+    if (club) {
+      player.clubId = club.id;
+      const ca = currentAbility(player);
+      player.contract = makeContract(rng, player, club, year, ca);
+      club.squad.push(player.id);
+      assignSquadNumbers(rng, club, world);
+    } else {
+      player.clubId = null;
+      player.contract = null;
+      world.freeAgents.push(player.id);
+    }
+  }
+}
+
+let customCounter = 0;
+/** Turn a library template into a live player object. */
+export function materialiseCustomPlayer(template, world, year) {
+  const age = template.age ?? 22;
+  const p = {
+    ...JSON.parse(JSON.stringify(template)),
+    id: `cu${(++customCounter).toString(36)}_${(template.id || 'x').slice(-4)}`,
+    age,
+    birthYear: year - age,
+    birthDay: template.birthDay ?? 120,
+    clubId: null,
+    squadNumber: null,
+    condition: 100,
+    sharpness: 80,
+    morale: 75,
+    form: 0,
+    injury: null,
+    suspension: 0,
+    yellowCards: 0,
+    unhappy: null,
+    contract: null,
+    season: emptyStats(),
+    career: { apps: 0, goals: 0, assists: 0, cleanSheets: 0, motm: 0, seasons: [] },
+    transferStatus: 'none',
+    interestFrom: [],
+    custom: true,
+  };
+  p.name = template.name || `${template.first || ''} ${template.last || ''}`.trim();
+  p.short = template.first ? `${template.first[0]}. ${template.last}` : p.name;
+  p.value = estimateValue(currentAbility(p), p.pa, age, 80);
+  return p;
+}
+
+function buildCompetitions(world, rng) {
+  // Domestic cups: every club in a nation's leagues enters.
+  for (const nation of world.nations) {
+    const clubIds = Object.values(world.clubs).filter((c) => c.nation === nation.id).map((c) => c.id);
+    world.competitions[`${nation.id}_CUP`] = {
+      id: `${nation.id}_CUP`,
+      name: `${nation.name} Cup`,
+      type: 'cup',
+      nation: nation.id,
+      entrants: clubIds,
+      rounds: [],
+      winner: null,
+      prizePerRound: Math.round(remap(nation.rep, 60, 95, 250e3, 2.2e6)),
+      history: [],
+    };
+  }
+  // Continental competitions are seeded at the start of each season from the
+  // previous campaign's league positions.
+  for (const def of [CONTINENTAL, SECONDARY_CONTINENTAL]) {
+    world.competitions[def.id] = {
+      id: def.id,
+      name: def.name,
+      shortName: def.shortName,
+      type: 'continental',
+      def,
+      groups: [],
+      rounds: [],
+      entrants: [],
+      winner: null,
+      history: [],
+    };
+  }
+}
+
+/** Aggregate squad ability — used by the AI, the board and the UI. */
+export function squadStrength(world, club) {
+  const players = club.squad.map((id) => world.players[id]).filter(Boolean);
+  const ranked = sortBy(players, { key: (p) => currentAbility(p), desc: true });
+  const top11 = ranked.slice(0, 11);
+  const rest = ranked.slice(11, 20);
+  const a = top11.reduce((s, p) => s + currentAbility(p), 0) / Math.max(1, top11.length);
+  const b = rest.length ? rest.reduce((s, p) => s + currentAbility(p), 0) / rest.length : a * 0.8;
+  return a * 0.82 + b * 0.18;
+}

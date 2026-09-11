@@ -1,0 +1,12 @@
+{
+  "name": "touchline",
+  "version": "0.1.0",
+  "description": "Touchline — a deep football management simulation. No dependencies, no build step.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "serve": "python3 -m http.server 8080",
+    "test": "node tools/test-engine.js",
+    "season": "node tools/sim-season.js"
+  }
+}
