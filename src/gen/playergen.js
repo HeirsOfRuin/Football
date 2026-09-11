@@ -323,7 +323,6 @@ export function generatePlayer(rng, opts) {
     yellowCards: 0,
     unhappy: null,
     contract: null,
-    value: estimateValue(ca, pa, age, leagueRep),
     // Season + career records
     season: emptyStats(),
     career: { apps: 0, goals: 0, assists: 0, cleanSheets: 0, motm: 0, seasons: [] },

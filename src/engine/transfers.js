@@ -7,7 +7,14 @@ import { squadDepth } from './lineup.js';
 import { weeklyWageBill } from './finance.js';
 import { expectedRole } from './training.js';
 
-/** Current market value, refreshed from ability, age, form and contract. */
+/**
+ * What a player is worth, from ability, age, form and recent performances.
+ *
+ * This is the single derivation of a player's worth in the game: every screen
+ * that shows a value and every decision that acts on one comes through here.
+ * Keeping a second, stored figure alongside it is how a squad list ends up
+ * disagreeing with the transfer market.
+ */
 export function marketValue(world, player) {
   const club = player.clubId ? world.clubs[player.clubId] : null;
   const league = club ? world.leagues.find((l) => l.id === club.leagueId) : null;
@@ -16,27 +23,26 @@ export function marketValue(world, player) {
   const seasonBoost = player.season?.apps > 8
     ? clamp(1 + ((player.season.ratingSum / Math.max(1, player.season.ratingCount)) - 6.7) * 0.14, 0.85, 1.25)
     : 1;
-  let contractMult = 1;
-  if (player.contract) {
-    const left = player.contract.expiresYear - world.year;
-    contractMult = left <= 0 ? 0.28 : left === 1 ? 0.62 : left === 2 ? 0.9 : 1;
-  } else {
-    contractMult = 0; // free agent
-  }
-  return Math.max(0, Math.round(base * form * seasonBoost * contractMult / 5000) * 5000);
+  return Math.max(0, Math.round(base * form * seasonBoost / 5000) * 5000);
 }
 
-/** What the selling club actually wants — usually above raw market value. */
+/**
+ * What the selling club wants for him — the player's worth, discounted by how
+ * little contract is left to run and adjusted for how badly they want to keep
+ * him. A free agent costs nothing, however much he is worth.
+ */
 export function askingPrice(world, player) {
   const club = player.clubId ? world.clubs[player.clubId] : null;
   const value = marketValue(world, player);
   if (!club) return 0;
+  const left = player.contract ? player.contract.expiresYear - world.year : 0;
+  const contractMult = left <= 0 ? 0.28 : left === 1 ? 0.62 : left === 2 ? 0.9 : 1;
   const role = expectedRole(world, club, player);
   const premium = { key: 1.85, rotation: 1.4, squad: 1.15, fringe: 0.92 }[role] ?? 1.2;
   const listed = player.transferStatus === 'listed' ? 0.8 : 1;
   const unhappy = player.unhappy ? 0.85 : 1;
   const youth = player.age <= 21 && player.pa - currentAbility(player) > 25 ? 1.25 : 1;
-  return Math.round(value * premium * listed * unhappy * youth / 5000) * 5000;
+  return Math.round(value * contractMult * premium * listed * unhappy * youth / 5000) * 5000;
 }
 
 /** Does the selling club accept this fee? */

@@ -4,9 +4,13 @@
 
 import { serialiseGame, deserialiseGame, saveMeta } from './codec.js';
 
+// Persisted identifiers are a contract with data already on the player's
+// device. Renaming any of these orphans every existing save or library without
+// an error — treat a change here as needing a migration, not a rename.
 const DB_NAME = 'touchline';
 const DB_VERSION = 1;
 const SAVE_STORE = 'saves';
+const SAVE_INDEX_KEY = 'touchline.saveIndex';
 
 let dbPromise = null;
 
@@ -53,7 +57,7 @@ export async function saveGame(slot, game) {
   await tx(SAVE_STORE, 'readwrite', (s) => s.put(payload));
   const index = listSaveIndex();
   index[slot] = { slot, ...payload.meta, savedAt: payload.savedAt };
-  localStorage.setItem('touchline.saveIndex', JSON.stringify(index));
+  localStorage.setItem(SAVE_INDEX_KEY, JSON.stringify(index));
   return payload.meta;
 }
 
@@ -67,12 +71,12 @@ export async function deleteSave(slot) {
   await tx(SAVE_STORE, 'readwrite', (s) => s.delete(slot));
   const index = listSaveIndex();
   delete index[slot];
-  localStorage.setItem('touchline.saveIndex', JSON.stringify(index));
+  localStorage.setItem(SAVE_INDEX_KEY, JSON.stringify(index));
 }
 
 export function listSaveIndex() {
   try {
-    return JSON.parse(localStorage.getItem('touchline.saveIndex') || '{}');
+    return JSON.parse(localStorage.getItem(SAVE_INDEX_KEY) || '{}');
   } catch {
     return {};
   }

@@ -77,7 +77,9 @@ function makeContract(rng, player, club, year, ca) {
     wage: Math.round(wage * rng.range(0.85, 1.18)),
     expiresYear: year + years,
     signedYear: year,
-    releaseClause: rng.chance(0.16) ? Math.round(player.value * rng.range(1.6, 3.2)) : 0,
+    releaseClause: rng.chance(0.16)
+      ? Math.round(estimateValue(ca, player.pa, player.age, club.rep) * rng.range(1.6, 3.2))
+      : 0,
     goalBonus: rng.chance(0.3) ? Math.round(wage * rng.range(0.3, 1.2)) : 0,
     appearanceFee: rng.chance(0.35) ? Math.round(wage * rng.range(0.05, 0.25)) : 0,
     loanedFrom: null,
@@ -147,6 +149,14 @@ export function generateWorld(opts = {}) {
     season: year,
     history: [],
   }));
+
+  // A pyramid only has the divisions the chosen world size includes, so record
+  // what each league actually connects to rather than assuming there is always
+  // one above and one below.
+  for (const l of leagues) {
+    l.hasDivisionAbove = leagues.some((x) => x.nation === l.nation && x.tier === l.tier - 1);
+    l.hasDivisionBelow = leagues.some((x) => x.nation === l.nation && x.tier === l.tier + 1);
+  }
 
   const world = {
     seed,
@@ -228,7 +238,7 @@ export function generateWorld(opts = {}) {
           isUserClub: false,
         };
         club.finances = financesForClub(nRng, club, league, nation);
-        club.board.expectation = boardExpectation(i, league.teams, league.tier);
+        club.board.expectation = boardExpectation(i, league.teams, league.tier, league.hasDivisionBelow);
 
         // --- Squad ---
         const baseCA = remap(rep, 20, 99, 52, 156);
@@ -301,19 +311,23 @@ export function generateWorld(opts = {}) {
   return world;
 }
 
-function boardExpectation(rankIndex, teams, tier) {
+function boardExpectation(rankIndex, teams, tier, canRelegate = true) {
   const t = rankIndex / Math.max(1, teams - 1);
+  // Nothing below to fall into, so survival is not a thing the board can ask for.
+  const bottomAsk = canRelegate
+    ? { type: 'survive', target: teams - 3, label: 'Avoid relegation' }
+    : { type: 'mid', target: teams - 2, label: 'Improve on last season' };
   if (tier === 1) {
     if (t < 0.1) return { type: 'title', label: 'Win the league' };
     if (t < 0.25) return { type: 'top', target: 4, label: 'Qualify for the Continental Cup' };
     if (t < 0.5) return { type: 'top', target: Math.ceil(teams * 0.4), label: 'Challenge for a continental place' };
     if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.65), label: 'Finish in mid-table' };
-    return { type: 'survive', target: teams - 3, label: 'Avoid relegation' };
+    return bottomAsk;
   }
   if (t < 0.2) return { type: 'top', target: 2, label: 'Win promotion' };
   if (t < 0.45) return { type: 'top', target: 6, label: 'Reach the promotion play-offs' };
   if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.6), label: 'Finish in mid-table' };
-  return { type: 'survive', target: teams - 3, label: 'Avoid relegation' };
+  return bottomAsk;
 }
 
 const NUMBER_PRIORITY = {
@@ -400,7 +414,6 @@ export function materialiseCustomPlayer(template, world, year) {
   };
   p.name = template.name || `${template.first || ''} ${template.last || ''}`.trim();
   p.short = template.first ? `${template.first[0]}. ${template.last}` : p.name;
-  p.value = estimateValue(currentAbility(p), p.pa, age, 80);
   return p;
 }
 

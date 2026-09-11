@@ -71,7 +71,7 @@ export function render(app) {
     const fam = p ? familiarity(p, s.slot.pos) : 0;
     const famCls = fam >= 16 ? '' : fam >= 12 ? 'border-color:var(--warn)' : 'border-color:var(--bad)';
     return `<div class="pitch-slot ${state.selectedSlot === i ? 'selected' : ''} ${p ? '' : 'empty'}"
-              data-slot="${i}" style="left:${s.slot.x}%;bottom:${s.slot.y}%">
+              data-slot="${i}" style="left:${8 + s.slot.x * 0.84}%;bottom:${7 + s.slot.y * 0.85}%">
               <div class="shirt" style="background:${esc(club.colours.primary)};color:${esc(club.colours.secondary)};${p ? famCls : ''}">
                 ${p ? (p.squadNumber ?? '') : s.slot.pos}</div>
               <div class="pname">${esc(p ? p.short : '—')}</div>

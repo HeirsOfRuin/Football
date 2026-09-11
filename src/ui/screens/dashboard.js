@@ -40,7 +40,7 @@ export function render(app) {
     <div class="grid c2-1">
       <div class="stack">
         ${next && opponent ? panel('Next Match', `
-          <div class="row" style="gap:16px">
+          <div class="row next-match" style="gap:16px">
             ${badge(club, 40)}
             <div><div style="font-size:15px;font-weight:600">${esc(club.short)}</div>
               <div class="faint small">${formRun(club.form)}</div></div>
@@ -53,7 +53,7 @@ export function render(app) {
               <div class="faint small">${formRun(opponent.form)}</div></div>
             ${badge(opponent, 40)}
           </div>
-          <div class="row small faint" style="margin-top:12px;justify-content:space-between">
+          <div class="row small faint next-match-meta" style="margin-top:12px;justify-content:space-between">
             <span>Squad strength ${Math.round(squadStrength(world, club))} v ${Math.round(squadStrength(world, opponent))}</span>
             <span>${esc(opponent.stadium.name)} · ${opponent.stadium.capacity.toLocaleString()}</span>
           </div>`) : panel('Next Match', emptyState('No fixtures scheduled.'))}

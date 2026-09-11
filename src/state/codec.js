@@ -6,6 +6,7 @@
 // well inside browser storage limits and makes them quick to write.
 
 import { ALL_ATTRS, HIDDEN_ATTRS } from '../data/attributes.js';
+import { GAME_VERSION } from './game.js';
 import { emptyStats } from '../gen/playergen.js';
 
 const CHAR_BASE = 48; // '0'
@@ -57,7 +58,6 @@ export function packPlayer(p) {
       p.contract.releaseClause || 0, p.contract.goalBonus || 0, p.contract.appearanceFee || 0,
       p.contract.loanedFrom || 0, p.contract.loanUntilYear || 0, p.contract.wageShare ?? null,
     ] : null,
-    v: p.value,
     ss: packStats(p.season),
     ca: p.career,
     ts: p.transferStatus === 'none' ? 0 : p.transferStatus,
@@ -122,7 +122,6 @@ export function unpackPlayer(d) {
       goalBonus: d.ct[4], appearanceFee: d.ct[5], loanedFrom: d.ct[6] || null,
       loanUntilYear: d.ct[7] || null, wageShare: d.ct[8],
     } : null,
-    value: d.v,
     season: unpackStats(d.ss),
     career: d.ca || { apps: 0, goals: 0, assists: 0, cleanSheets: 0, motm: 0, seasons: [] },
     transferStatus: d.ts || 'none',
@@ -147,7 +146,7 @@ export function serialiseGame(game) {
   for (const id in world.clubs) clubs[id] = cleanClub(world.clubs[id]);
 
   return {
-    v: game.version,
+    v: GAME_VERSION,
     savedAt: Date.now(),
     meta: saveMeta(game),
     game: {
@@ -201,7 +200,27 @@ export function saveMeta(game) {
   };
 }
 
-export function deserialiseGame(data) {
+/**
+ * Saves are a contract with data that already exists on someone's device.
+ * A save written by a newer build cannot be guessed at, so it is refused with
+ * an explanation rather than loaded into a shape the code no longer expects;
+ * an older one is brought forward here.
+ */
+export function migrateSave(data) {
+  const version = data.v ?? data.game?.version ?? 1;
+  if (version > GAME_VERSION) {
+    throw new Error(
+      `This save was made by a newer version of Touchline (save format ${version}, this build reads ${GAME_VERSION}). Update the game to open it.`,
+    );
+  }
+  // v1 -> v2: players carried a stored `value` that is now derived on demand.
+  // Nothing reads the old field, so there is nothing to move; the version is
+  // stamped forward so the next migration knows where it starts from.
+  return { ...data, v: GAME_VERSION };
+}
+
+export function deserialiseGame(raw) {
+  const data = migrateSave(raw);
   const { NATION_BY_ID } = NATION_MODULE;
   const world = {
     seed: data.world.seed,

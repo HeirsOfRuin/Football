@@ -24,7 +24,7 @@ export const WEATHER = ['Clear', 'Overcast', 'Light Rain', 'Heavy Rain', 'Windy'
 export const P = {
   loseZone: [0.100, 0.140, 0.140],
   advZone: [0.430, 0.360, 0],
-  shotZone2: 0.505,
+  shotZone2: 0.525,
   longShot: 0.034,
   cornerFromFail: 0.720,
   cornerFromMiss: 0.360,
@@ -32,7 +32,7 @@ export const P = {
   attackFoulPerTick: 0.021,
   foulOnTurnover: 0.090,
   yellowPerFoul: 0.155,
-  secondYellowDamping: 0.30,
+  secondYellowDamping: 0.22,
   straightRed: 0.0007,
   penaltyPerChance: 0.011,
   injuryPerTick: 0.00032,
@@ -44,6 +44,7 @@ export const P = {
   longShotQuality: 0.042,
   penaltyQuality: 0.78,
   fatiguePerTick: 0.152,
+  clockRunningWhenAhead: 0.075,
 };
 
 function emptyMatchStats() {
@@ -143,9 +144,10 @@ export function beginMatch(world, ctx) {
     minute: 0,
     half: 1,
     stoppage: 0,
-    homeAdvantage: neutral ? 1.0 : 1 + 0.055 * crowdPull,
+    homeAdvantage: neutral ? 1.0 : 1 + 0.040 * crowdPull,
     possession: rng.chance(0.5) ? 'home' : 'away',
     zone: 0,
+    onCounter: false,
     events: [],
     finished: false,
     result: null,
@@ -267,14 +269,26 @@ function liveTotals(state, side) {
   return totals;
 }
 
-function chanceQuality(state, atk, defTot, gkRating, type) {
+function chanceQuality(state, atk, defTot, gkRating, type, opts = {}) {
   if (type === 'penalty') return P.penaltyQuality;
   if (type === 'corner') return P.cornerQuality * state.rng.range(0.6, 1.7);
   if (type === 'freekick') return P.freeKickDirectQuality * state.rng.range(0.5, 1.6);
   if (type === 'longshot') return P.longShotQuality * state.rng.range(0.5, 1.8);
   const adv = advantage(atk.create + atk.finish * 0.5, defTot.defend + gkRating * 0.9);
   const base = P.chanceQualityBase + P.chanceQualitySpan * Math.pow(clamp(adv, 0, 1), 1.25);
-  return clamp(base * state.rng.range(0.35, 2.3), 0.015, 0.82);
+  const mine = opts.attacking || {};
+  const theirs = opts.defending || {};
+  // Every term here is neutral at its default setting, so the engine's overall
+  // calibration is untouched by making these instructions matter.
+  const shape = 1
+    - (mine.width ?? 0) * 0.055
+    - (mine.pass ?? 0) * 0.05
+    + (mine.focus === 'Through the Middle' ? 0.1 : 0)
+    - (mine.focus === 'Left Flank' || mine.focus === 'Right Flank' ? 0.05 : 0)
+    + (theirs.line ?? 0) * 0.055
+    + (opts.beatTheTrap ? 0.14 : 0)
+    + (opts.counter ? 0.4 : 0);
+  return clamp(base * shape * state.rng.range(0.35, 2.3), 0.015, 0.82);
 }
 
 function resolveShot(state, side, opp, chance) {
@@ -311,7 +325,8 @@ function resolveShot(state, side, opp, chance) {
   if (isBig) side.stats.bigChances++;
 
   // Offside — wipes the chance out before anything else.
-  if (chance.type === 'open' && state.rng.chance(P.offsidePerShot * (1 + (opp.strength.idx.line > 0 ? 0.35 : 0)))) {
+  const trapFactor = (1 + opp.strength.idx.line * 0.2) * (opp.strength.idx.offsideTrap ? 2.2 : 1);
+  if (chance.type === 'open' && state.rng.chance(P.offsidePerShot * trapFactor)) {
     side.stats.shots--;
     side.stats.xg -= chance.quality;
     r.shots--;
@@ -398,7 +413,11 @@ function makeChance(state, side, opp, type, forcedShooter = null) {
   const atk = liveTotals(state, side);
   const defTot = liveTotals(state, opp);
   const gkR = keeperRating(opp.strength.keeper);
-  const quality = chanceQuality(state, atk, defTot, gkR, type);
+  const beatTheTrap = type === 'open' && opp.strength.idx.offsideTrap === 1;
+  const quality = chanceQuality(state, atk, defTot, gkR, type, {
+    attacking: side.strength.idx, defending: opp.strength.idx, beatTheTrap,
+    counter: type === 'open' && state.onCounter,
+  });
 
   let shooter = forcedShooter;
   if (!shooter) {
@@ -707,6 +726,19 @@ export function stepMatch(state) {
   side.stats.possessionTicks++;
   state.momentum *= 0.985;
 
+  // A side in front naturally slows the game down: possession is kept but
+  // nothing is done with it, taking chances out of the match for both teams.
+  // The instruction scales that tendency in both directions — a side told never
+  // to waste time keeps playing, which is riskier at both ends.
+  const lead = side.goals - opponentOf(state, side).goals;
+  if (lead > 0 && state.minute >= 55) {
+    const slowdown = P.clockRunningWhenAhead * (1 + side.strength.idx.timeWasting * 0.5);
+    if (slowdown > 0 && state.rng.chance(slowdown)) {
+      if (state.zone > 0 && state.rng.chance(0.5)) state.zone -= 1;
+      return endTick(state, side, opp, startEvents);
+    }
+  }
+
   const foulOutcome = rollFouls(state, side, opp, z);
   if (foulOutcome === 'goal' || foulOutcome === 'converted' || foulOutcome === 'lost') {
     return endTick(state, side, opp, startEvents);
@@ -717,10 +749,13 @@ export function stepMatch(state) {
       ? advantage(atk.build * 1.1, def.press)
       : advantage(atk.create + atk.build * 0.5, def.defend * 0.8 + def.press * 0.6);
     const keepAdv = advantage(atk.build + atk.create * 0.35, def.press + def.defend * 0.3);
-    const style = 1 - instrIndex(side.tactic.instructions, 'passing') * 0.05
-      - instrIndex(side.tactic.instructions, 'tempo') * 0.03;
+    const mine = side.strength.idx;
+    const theirs = opp.strength.idx;
+    // Short passing and a slower tempo protect the ball; a high line from the
+    // opposition squeezes the space to play out into.
+    const style = (1 - mine.pass * 0.05 - mine.tempo * 0.045) * (1 + theirs.line * 0.055);
     const pLose = P.loseZone[z] * (4.3 - 6.6 * keepAdv) * style;
-    const pAdv = P.advZone[z] * (0.74 + 0.42 * progressAdv);
+    const pAdv = P.advZone[z] * (0.74 + 0.42 * progressAdv) * (1 + mine.tempo * 0.085 + mine.pass * 0.075);
 
     side.stats.passesAttempted += 3;
     const roll = state.rng.next();
@@ -738,8 +773,16 @@ export function stepMatch(state) {
     }
   } else {
     const shotAdv = advantage(atk.create + atk.finish * 0.6 + atk.drive * 0.3, def.defend * 1.15 + keeperRating(opp.strength.keeper) * 0.5);
-    const pShot = P.shotZone2 * (0.5 + 1.0 * shotAdv);
-    const pLose = P.loseZone[2] * (4.3 - 6.6 * advantage(atk.create + atk.build * 0.3, def.defend + def.press * 0.3));
+    const mine = side.strength.idx;
+    const theirs = opp.strength.idx;
+    const focusCentral = mine.focus === 'Through the Middle';
+    const focusFlank = mine.focus === 'Left Flank' || mine.focus === 'Right Flank';
+    // Width and attacking focus trade the volume of chances against their quality.
+    const volume = 1 + mine.width * 0.075 + (focusFlank ? 0.09 : 0) - (focusCentral ? 0.09 : 0)
+      - theirs.line * 0.05 + mine.tempo * 0.04;
+    const pShot = P.shotZone2 * (0.5 + 1.0 * shotAdv) * volume;
+    const pLose = P.loseZone[2] * (4.3 - 6.6 * advantage(atk.create + atk.build * 0.3, def.defend + def.press * 0.3))
+      * (1 + mine.tempo * 0.05);
     const roll = state.rng.next();
     side.stats.passesAttempted += 2;
     if (roll < pShot) {
@@ -791,6 +834,7 @@ function afterShot(state, side, opp) {
       if (state.events[state.events.length - 1]?.type === 'goal') return;
     }
   }
+  state.onCounter = false;
   if (type === 'blocked' && state.rng.chance(0.42)) {
     state.zone = 2; // rebound falls to the attacking side
     return;
@@ -835,10 +879,17 @@ function turnover(state, side, opp, zone) {
   state.possession = opp.side;
   let newZone = 2 - zone;
   const oppTotals = liveTotals(state, opp);
-  const counterOn = opp.tactic.instructions?.counter === 'Yes';
-  const counterChance = (counterOn ? 0.22 : 0.09) * clamp(oppTotals.drive / Math.max(1, liveTotals(state, side).defend), 0.4, 2.2);
+  const counterOn = opp.strength.idx.counter === 1;
+  // A high line is what makes a counter-attack worth playing against you.
+  const counterChance = (counterOn ? 0.34 : 0.09)
+    * (1 + side.strength.idx.line * 0.22)
+    * clamp(oppTotals.drive / Math.max(1, liveTotals(state, side).defend), 0.4, 2.2);
+  state.onCounter = false;
   if (newZone < 2 && state.rng.chance(counterChance)) {
     newZone += 1;
+    // Breaking from deep at pace can carry a side straight into the final third.
+    if (newZone < 2 && counterOn && state.rng.chance(0.3)) newZone += 1;
+    state.onCounter = true;
     if (state.rng.chance(0.4)) {
       pushEvent(state, 'counter', `${opp.club.short} break at pace.`, { side: opp.side });
     }

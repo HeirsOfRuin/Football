@@ -340,11 +340,16 @@ export function resolveTie(game, comp, tie, fixtures) {
 /** Positions that earn promotion, relegation or continental football. */
 export function leagueZones(league) {
   const teams = league.teams;
+  // The bottom division of a pyramid has nowhere to send anyone, and the top
+  // has nowhere to promote from. Showing those zones promises something the
+  // game will not do.
+  const canRelegate = league.hasDivisionBelow !== false;
+  const canPromote = league.hasDivisionAbove !== false && league.tier > 1;
   return {
     champion: 1,
-    promotion: league.promoted,
-    playoff: league.tier > 1 ? [league.promoted + 1, Math.min(teams, league.promoted + 4)] : null,
-    relegation: league.relegated,
+    promotion: canPromote ? league.promoted : 0,
+    playoff: canPromote ? [league.promoted + 1, Math.min(teams, league.promoted + 4)] : null,
+    relegation: canRelegate ? league.relegated : 0,
     continentalPrimary: league.tier === 1 ? (league.rep >= 88 ? 4 : league.rep >= 80 ? 3 : league.rep >= 70 ? 2 : 1) : 0,
     continentalSecondary: league.tier === 1 ? (league.rep >= 80 ? 3 : 2) : 0,
   };

@@ -127,7 +127,7 @@ a { color: var(--accent); }
 .topbar .stat { font-size: 12px; color: var(--text-faint); }
 .topbar .stat b { display: block; font-size: 13px; color: var(--text); font-family: var(--mono); font-weight: 600; }
 
-.content { flex: 1; overflow-y: auto; padding: 18px; }
+.content { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 18px; min-width: 0; }
 .content.no-pad { padding: 0; }
 
 /* ---------- Panels & typography ---------- */
@@ -138,7 +138,10 @@ a { color: var(--accent); }
   border-radius: var(--radius);
   margin-bottom: 14px;
   overflow: hidden;
+  min-width: 0;
 }
+/* A wide table scrolls within its panel rather than widening the whole page. */
+.panel-body.tight { overflow-x: auto; }
 .panel-head {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 13px; border-bottom: 1px solid var(--line);
@@ -167,7 +170,7 @@ h3 { margin: 0 0 8px; font-size: 14px; }
 .good { color: var(--good); }
 .bad { color: var(--bad); }
 .warn { color: var(--warn); }
-.row { display: flex; align-items: center; gap: 10px; }
+.row { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .row.wrap { flex-wrap: wrap; }
 .stack { display: flex; flex-direction: column; gap: 10px; }
 .spacer { flex: 1; }
@@ -365,7 +368,8 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 .tab:hover { color: var(--text); background: none; }
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
 
-.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; }
+.kv { display: grid; grid-template-columns: minmax(0, auto) minmax(0, 1fr); gap: 4px 14px; font-size: 13px; }
+.kv dt { overflow-wrap: anywhere; }
 .kv dt { color: var(--text-dim); }
 .kv dd { margin: 0; text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
 
@@ -385,8 +389,59 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 820px) {
-  .shell { grid-template-columns: 62px 1fr; }
-  .brand h1, .brand .club-strip, .nav-item span.lbl { display: none; }
-  .nav-item { justify-content: center; padding: 10px 0; }
+/* Phones and small tablets: the sidebar becomes a scrolling strip across the
+   top, and everything below it runs in a single column. Checked on a 390px
+   viewport, which is where the desktop layout fell apart. */
+@media (max-width: 760px) {
+  .shell { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
+
+  .sidebar {
+    flex-direction: row; align-items: stretch;
+    border-right: 0; border-bottom: 1px solid var(--line);
+    overflow-x: auto; overflow-y: hidden;
+  }
+  .brand { padding: 8px 12px; border-bottom: 0; border-right: 1px solid var(--line); display: flex; align-items: center; }
+  .brand h1 { display: none; }
+  .brand .club-strip { margin: 0; }
+  .brand .club-name { font-size: 11px; max-width: 110px; }
+  .nav { display: flex; flex: 1; padding: 0; overflow-x: auto; overflow-y: hidden; }
+  .nav-item {
+    border-left: 0; border-bottom: 2px solid transparent;
+    padding: 11px 13px; white-space: nowrap; font-size: 13px;
+  }
+  .nav-item.active { border-left-color: transparent; border-bottom-color: var(--accent); }
+  .nav-item .count { margin-left: 6px; }
+  .nav-sep { display: none; }
+
+  .topbar { flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; }
+  .topbar .date { font-size: 12px; }
+  .topbar .stat { font-size: 11px; }
+  .topbar .spacer { display: none; }
+  .topbar button { margin-left: auto; }
+
+  .content { padding: 11px; }
+  .panel-body { padding: 11px; }
+  .panel { margin-bottom: 11px; }
+  .grid { gap: 11px; }
+  .grid.c2, .grid.c3, .grid.c2-1, .grid.c1-2 { grid-template-columns: minmax(0, 1fr); }
+
+  /* The next-match block is five fixed blocks in a row; on a phone it has to
+     become three stacked rows or the middle column reduces to one word a line. */
+  .next-match { display: grid; grid-template-columns: auto 1fr auto; gap: 8px 10px; }
+  .next-match > .center { grid-column: 1 / -1; order: 3; }
+  .next-match > .right { text-align: right; }
+  .next-match-meta { flex-direction: column; align-items: flex-start; gap: 2px; }
+
+  .match-scoreboard { grid-template-columns: 1fr; gap: 8px; padding: 11px; text-align: center; }
+  .match-scoreboard .team, .match-scoreboard .team.away { flex-direction: row; justify-content: center; text-align: center; }
+  .match-scoreboard .score { font-size: 28px; }
+  .pitch { max-width: 100%; }
+  .modal-backdrop { padding: 8px; }
+  .modal-body { padding: 11px; }
+  .field-row { flex-wrap: wrap; }
+}
+
+@media (max-width: 420px) {
+  .topbar .stat { display: none; }
+  .topbar .pill { display: none; }
 }

@@ -138,7 +138,10 @@ export function abilityTier(ca) {
 export function listLibrary() {
   try {
     const raw = JSON.parse(localStorage.getItem(LIBRARY_KEY) || '{"v":1,"players":[]}');
-    return Array.isArray(raw.players) ? raw.players : [];
+    if (!Array.isArray(raw.players)) return [];
+    // A library written by a newer build may carry fields this one does not
+    // understand; validate rather than trusting the shape.
+    return (raw.v ?? 1) > LIBRARY_VERSION ? raw.players.map(validateCustomPlayer) : raw.players;
   } catch {
     return [];
   }
@@ -202,6 +205,9 @@ export async function importLibraryFile(file) {
   const data = JSON.parse(await file.text());
   const incoming = Array.isArray(data) ? data : data.players;
   if (!Array.isArray(incoming)) throw new Error('That file does not contain a player library.');
+  if (!Array.isArray(data) && (data.v ?? 1) > LIBRARY_VERSION) {
+    throw new Error(`That library was exported by a newer version of Touchline (format ${data.v}).`);
+  }
   const existing = listLibrary();
   const ids = new Set(existing.map((p) => p.id));
   let added = 0;

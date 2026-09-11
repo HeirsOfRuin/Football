@@ -3,6 +3,7 @@
 import { esc, panel, panelTight, badge, money, emptyState, formRun, kv, shortDate } from '../components.js';
 import { sortTable, clubFixtures } from '../../state/game.js';
 import { currentAbility } from '../../data/attributes.js';
+import { marketValue } from '../../engine/transfers.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
@@ -87,7 +88,7 @@ function clubView(app, club, state) {
               <td class="num">${currentAbility(p)}</td>
               <td class="num">${p.season.apps + p.season.subApps}</td>
               <td class="num">${p.season.goals}</td>
-              <td class="num">${money(p.value)}</td>
+              <td class="num">${money(marketValue(world, p))}</td>
               <td class="small">${p.transferStatus === 'listed' ? '<span class="pill warn">Listed</span>' : p.injury ? '<span class="pill bad">Injured</span>' : ''}</td>
             </tr>`).join('')}</tbody></table></div>`)}
         </div>

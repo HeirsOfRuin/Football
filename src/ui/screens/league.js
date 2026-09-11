@@ -84,7 +84,9 @@ function leagueView(app, league) {
       <div class="stack">
         ${statTable('Top Scorers', scorers, (p) => p.season.goals, world)}
         ${statTable('Assists', assisters, (p) => p.season.assists, world)}
-        ${panelTight('Best Average Rating', `<table><tbody>${rated.map((p) => `<tr class="clickable" data-player="${esc(p.id)}">
+        ${panelTight('Best Average Rating', rated.length === 0
+    ? emptyState('Nobody has played six matches yet.')
+    : `<table><tbody>${rated.map((p) => `<tr class="clickable" data-player="${esc(p.id)}">
           <td class="nowrap small">${esc(p.name)}</td><td class="small faint">${esc(world.clubs[p.clubId]?.code || '')}</td>
           <td class="num">${ratingCell(p.season.ratingSum / p.season.ratingCount)}</td></tr>`).join('')}</tbody></table>`)}
       </div>

@@ -3,7 +3,7 @@
 import { esc, panel, panelTight, money, emptyState, tabs, shortDate, tableHead } from '../components.js';
 import { userClub } from '../../state/game.js';
 import { currentAbility, POSITIONS, POSITION_LABELS, positionEffectiveness } from '../../data/attributes.js';
-import { marketValue, askingPrice, identifyNeed } from '../../engine/transfers.js';
+import { marketValue, askingPrice, identifyNeed, contractDemand } from '../../engine/transfers.js';
 import { weeklyWageBill } from '../../engine/finance.js';
 import { transferWindowOpen } from '../../core/calendar.js';
 import { sortBy } from '../../core/util.js';
@@ -195,7 +195,7 @@ function shortlistView(app, club, state) {
         <td class="small">${c ? esc(c.short) : '<span class="faint">Free agent</span>'}</td>
         <td class="num">${currentAbility(p)}</td>
         <td class="num">${c ? money(askingPrice(world, p)) : 'Free'}</td>
-        <td class="num">${money(marketValue(world, p) > 0 ? (p.contract?.wage ?? 0) : 0)}</td>
+        <td class="num">${money(contractDemand(world, p, club).wage)}</td>
         <td class="nowrap"><button class="sm primary" data-bid="${esc(p.id)}">Bid</button>
           <button class="sm" data-unshort="${esc(p.id)}">Remove</button></td>
       </tr>`;

@@ -7,7 +7,6 @@
 
 import { ALL_ATTRS, ATTR_GROUPS, POSITION_WEIGHTS, currentAbility, invalidateAbility } from '../data/attributes.js';
 import { clamp, remap } from '../core/util.js';
-import { estimateValue } from '../gen/playergen.js';
 
 const PHYSICAL = new Set(ATTR_GROUPS.physical);
 const MENTAL = new Set(ATTR_GROUPS.mental);
@@ -41,16 +40,21 @@ export function developmentRate(world, club, player) {
   const age = player.age;
   const ageFactor = age <= 19 ? 1.0 : age <= 21 ? 0.92 : age <= 23 ? 0.78 : age <= 25 ? 0.52
     : age <= 27 ? 0.3 : age <= 29 ? 0.14 : age <= 30 ? 0.05 : 0;
-  const potentialFactor = clamp(gap / 38, 0, 1.35);
+  // Diminishing returns as a player nears his ceiling, but with a floor: this
+  // decays alongside the age factor, and without a floor the two together stall
+  // a prospect at three-quarter speed exactly as he turns 24.
+  const potentialFactor = gap <= 0 ? 0 : clamp(gap / 34, 0.32, 1.3);
   const facility = remap(club?.facilities?.training ?? 10, 1, 20, 0.58, 1.42);
   const coach = remap(coachFor(club, player.positions[0]), 1, 20, 0.72, 1.3);
   const prof = remap(player.hidden?.professionalism ?? 10, 1, 20, 0.6, 1.4);
   const determination = remap(player.hidden?.determination ?? player.attrs?.determination ?? 10, 1, 20, 0.82, 1.18);
-  const minutes = player.season?.minutes ?? 0;
+  // Under-21s play youth and reserve football that never shows in the first
+  // team's minutes, so they keep developing without being picked.
+  const minutes = (player.season?.minutes ?? 0) + (player.age <= 21 ? 850 : 0);
   const playingTime = remap(minutes, 0, 2200, 0.62, 1.28);
   const intensity = club?.trainingIntensity === 'Intense' ? 1.12 : club?.trainingIntensity === 'Light' ? 0.88 : 1;
 
-  let rate = 0.113 * potentialFactor * ageFactor * facility * coach * prof * determination * playingTime * intensity;
+  let rate = 0.118 * potentialFactor * ageFactor * facility * coach * prof * determination * playingTime * intensity;
 
   // Decline sets in after the peak, and hits the unprofessional hardest.
   if (age >= 30) {
@@ -72,10 +76,16 @@ function pickGrowthAttr(rng, player, club) {
     if (isGk) return !['finishing', 'crossing', 'dribbling', 'marking', 'tackling', 'heading', 'longShots', 'offTheBall'].includes(a);
     return !GK_SET.has(a);
   });
+  const maxW = Math.max(...Object.values(weights), 1);
   return rng.weighted(candidates, (a) => {
     const headroom = (20 - player.attrs[a]) / 19;
     if (headroom <= 0.01) return 0.01;
-    const importance = 0.35 + (weights[a] || 0) / 10;
+    // Weight hard toward what the position actually uses. The development rate
+    // is calculated as if every point earned makes the player better, so points
+    // spent on attributes his position ignores are points that quietly vanish —
+    // a player can train for years and barely improve. Some spread is still
+    // wanted, so a peripheral attribute keeps a small share.
+    const importance = 0.12 + ((weights[a] || 0) / maxW) * 1.5;
     const focused = emphasis[a] || 1;
     // Older players can still add mental attributes long after the legs go.
     const ageBias = player.age >= 28 && MENTAL.has(a) ? 1.5 : player.age >= 28 && PHYSICAL.has(a) ? 0.4 : 1;
@@ -107,11 +117,7 @@ export function trainPlayer(rng, world, club, player) {
     if (player.attrs[attr] > 1) { player.attrs[attr]--; changed = true; }
     player.devBank += 1;
   }
-  if (changed) {
-    invalidateAbility(player);
-    const league = world.leagues.find((l) => l.id === club?.leagueId);
-    player.value = estimateValue(currentAbility(player), player.pa, player.age, league?.rep ?? 60);
-  }
+  if (changed) invalidateAbility(player);
   return changed;
 }
 

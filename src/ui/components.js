@@ -2,6 +2,7 @@
 // to the shell, which sets innerHTML once and then wires events by delegation.
 
 import { money as fmtMoney, clamp, remap } from '../core/util.js';
+import { marketValue } from '../engine/transfers.js';
 import { currentAbility, POSITION_GROUP, familiarity, familiarityLabel } from '../data/attributes.js';
 import { shortDate, formatDay } from '../core/calendar.js';
 
@@ -118,7 +119,7 @@ export function playerRow(world, p, opts = {}) {
     <td class="num">${p.season.goals}</td>
     <td class="num">${p.season.assists}</td>
     <td class="num">${ratingCell(avg)}</td>
-    <td class="num">${money(p.value)}</td>
+    <td class="num">${money(marketValue(world, p))}</td>
     <td class="num">${p.contract ? money(p.contract.wage) : '—'}</td>
     <td>${stars(ca)}</td>
   </tr>`;
@@ -154,7 +155,7 @@ export function sortValue(p, key, world) {
     case 'goals': return p.season.goals;
     case 'assists': return p.season.assists;
     case 'rating': return p.season.ratingCount ? p.season.ratingSum / p.season.ratingCount : 0;
-    case 'value': return p.value;
+    case 'value': return marketValue(world, p);
     case 'wage': return p.contract?.wage ?? 0;
     case 'ability': return currentAbility(p);
     case 'club': return p.clubId ? (world.clubs[p.clubId]?.name ?? '') : 'zzz';

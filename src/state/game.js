@@ -19,7 +19,10 @@ import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contract
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping } from '../engine/ai.js';
 import { news, matchHeadline } from '../engine/news.js';
 
-export const GAME_VERSION = 1;
+// Bump whenever the shape written by the save codec changes, and add a
+// migration in codec.js. Version 2 dropped the stored player `value` field in
+// favour of deriving worth in one place.
+export const GAME_VERSION = 2;
 
 export function newGame(opts = {}) {
   const {
@@ -322,6 +325,12 @@ export function finishFixture(game, fixture, state) {
 
   reportNotableResult(game, fixture, state, home, away);
 
+  // Resolve any competition round this result completed. This has to happen
+  // here rather than once per day: the user's own match is played after the
+  // day has advanced, so a round they finish themselves — a cup final they win
+  // — would otherwise never be settled, paid out or awarded.
+  advanceCompetitions(game, subRng(game.rng, `comp:${fixture.id}`));
+
   game.lastResults.unshift({
     day: game.day, comp: fixture.compName, round: fixture.round,
     home: home.short, away: away.short, hg: state.result.homeGoals, ag: state.result.awayGoals,
@@ -458,7 +467,6 @@ export function advanceDay(game) {
     if (f === userFixture) continue;
     playFixture(game, f);
   }
-  if (todays.length) advanceCompetitions(game, dayRng);
 
   if (userFixture) {
     game.status = 'userMatch';
@@ -981,7 +989,6 @@ export function rolloverSeason(game) {
       delete world.players[p.id];
       continue;
     }
-    p.value = estimateValue(ca, p.pa, p.age, 60);
   }
 
   // Contracts: AI clubs renew or release; the user is prompted separately.
@@ -996,7 +1003,10 @@ export function rolloverSeason(game) {
       const league = world.leagues.find((l) => l.id === club.leagueId);
       const pos = rng.pick(['GK', 'DC', 'DL', 'DR', 'DM', 'MC', 'ML', 'MR', 'AMC', 'AML', 'AMR', 'ST']);
       const age = rng.int(18, 28);
-      const targetCA = clamp(Math.round(remap(club.rep, 20, 99, 52, 156) * rng.range(0.62, 0.92)), 25, 180);
+      // Centred on the squad quality curve a club is generated with. Filling
+      // gaps with players below that band erodes every division a little each
+      // season, and eight seasons of it makes the whole world visibly worse.
+      const targetCA = clamp(Math.round(remap(club.rep, 20, 99, 52, 156) * rng.range(0.72, 1.0)), 25, 180);
       const p = generatePlayer(rng, {
         nationId: rng.chance(0.75) ? club.nation : rng.pick(world.nations).id,
         pos, age, targetCA, targetPA: clamp(targetCA + rng.int(0, 30), targetCA, 195),
@@ -1057,18 +1067,22 @@ function pruneFreeAgents(game, rng, keep = 160) {
 
 function expectationFor(club, league) {
   const finish = club.lastFinish ?? Math.ceil(league.teams / 2);
+  const bottomAsk = league.hasDivisionBelow !== false
+    ? { type: 'survive', target: league.teams - league.relegated, label: 'Avoid relegation' }
+    : { type: 'mid', target: league.teams - 2, label: 'Improve on last season' };
+  const canPromote = league.hasDivisionAbove !== false && league.tier > 1;
   const t = (finish - 1) / Math.max(1, league.teams - 1);
   if (league.tier === 1) {
     if (t < 0.1) return { type: 'title', label: 'Win the league' };
     if (t < 0.25) return { type: 'top', target: 4, label: 'Qualify for the Continental Cup' };
     if (t < 0.5) return { type: 'top', target: Math.ceil(league.teams * 0.4), label: 'Challenge for a continental place' };
     if (t < 0.78) return { type: 'mid', target: Math.ceil(league.teams * 0.65), label: 'Finish in mid-table' };
-    return { type: 'survive', target: league.teams - league.relegated, label: 'Avoid relegation' };
+    return bottomAsk;
   }
-  if (t < 0.15) return { type: 'top', target: league.promoted, label: 'Win promotion' };
-  if (t < 0.4) return { type: 'top', target: league.promoted + 4, label: 'Reach the promotion play-offs' };
+  if (canPromote && t < 0.15) return { type: 'top', target: league.promoted, label: 'Win promotion' };
+  if (canPromote && t < 0.4) return { type: 'top', target: league.promoted + 4, label: 'Reach the promotion play-offs' };
   if (t < 0.78) return { type: 'mid', target: Math.ceil(league.teams * 0.6), label: 'Finish in mid-table' };
-  return { type: 'survive', target: league.teams - league.relegated, label: 'Avoid relegation' };
+  return bottomAsk;
 }
 
 export { sortTable, leagueZones };

@@ -7,10 +7,12 @@
 import { Rng } from '../src/core/rng.js';
 import { generateWorld, squadStrength } from '../src/gen/worldgen.js';
 import { generatePlayer } from '../src/gen/playergen.js';
-import { abilityForPosition, currentAbility, ALL_ATTRS } from '../src/data/attributes.js';
+import { abilityForPosition, currentAbility, ALL_ATTRS, POSITION_WEIGHTS } from '../src/data/attributes.js';
 import { simulateMatch } from '../src/engine/match.js';
 import { autoPick, autoAssignSpecialists, buildLineup } from '../src/engine/lineup.js';
-import { roundRobin, drawKnockoutRound, sortTable } from '../src/engine/season.js';
+import { roundRobin, drawKnockoutRound, sortTable, leagueZones } from '../src/engine/season.js';
+import { MENTALITIES, INSTRUCTION_DEFS, FORMATIONS, ROLES } from '../src/data/tactics.js';
+import { TRAINING_FOCUSES, developmentRate, trainPlayer } from '../src/engine/training.js';
 import { newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -19,6 +21,8 @@ import { SEASON_DAYS } from '../src/core/calendar.js';
 let passed = 0;
 let failed = 0;
 const failures = [];
+const observed = {};
+const record = (label, value) => { observed[label] = value; };
 
 function check(name, condition, detail = '') {
   if (condition) { passed++; process.stdout.write('.'); } else {
@@ -119,6 +123,10 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     check('goals never exceed shots on target', r.homeGoals <= r.homeStats.onTarget && r.awayGoals <= r.awayStats.onTarget);
   }
   const perTeam = agg.m * 2;
+  record('matches simulated', agg.m);
+  record('goals per match', (agg.goals / agg.m).toFixed(2));
+  record('shots per team', (agg.shots / perTeam).toFixed(2));
+  record('home/draw/away %', `${((agg.home / agg.m) * 100).toFixed(0)}/${((agg.draw / agg.m) * 100).toFixed(0)}/${(((agg.m - agg.home - agg.draw) / agg.m) * 100).toFixed(0)}`);
   near('goals per match', agg.goals / agg.m, 2.75, 0.45);
   near('shots per team', agg.shots / perTeam, 12.6, 2.2);
   near('shots on target per team', agg.onTarget / perTeam, 4.4, 1.0);
@@ -151,6 +159,124 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     `strongest (${Math.round(squadStrength(world, strong))}) beat weakest (${Math.round(squadStrength(world, weak))}) ${strongRate.toFixed(0)}% at home`);
 }
 
+// --- Every setting the interface offers must reach the engine ----------------
+{
+  // The simulation is deterministic, so with a fixed seed a setting the engine
+  // never reads produces byte-identical matches. That makes this an exact test
+  // for decoration rather than a statistical one: no sample size to argue about.
+  const league = world.leagues.find((l) => l.tier === 1);
+  const [home, away] = league.clubIds.slice(0, 2).map((id) => world.clubs[id]);
+  const fingerprint = (mutate) => {
+    const rng = new Rng(4242);
+    const out = [];
+    for (let i = 0; i < 12; i++) {
+      for (const c of [home, away]) {
+        for (const id of c.squad) Object.assign(world.players[id], { condition: 96, matchCondition: 96, morale: 70, form: 0, sharpness: 85 });
+      }
+      const tactic = JSON.parse(JSON.stringify(home.tactic));
+      mutate(tactic);
+      const st = simulateMatch(world, { homeClub: home, awayClub: away, homeTactic: tactic, awayTactic: away.tactic, rng });
+      const r = st.result;
+      out.push(`${r.homeGoals}-${r.awayGoals}:${r.homeStats.shots}:${r.awayStats.shots}:${r.homeStats.possession}:${r.homeStats.yellow}:${r.homeStats.offsides}`);
+    }
+    return out.join('|');
+  };
+  const base = fingerprint(() => {});
+  for (const m of MENTALITIES) {
+    if (m === 'Balanced') continue;
+    check(`mentality "${m}" changes the simulation`, fingerprint((t) => { t.mentality = m; }) !== base);
+  }
+  for (const [key, def] of Object.entries(INSTRUCTION_DEFS)) {
+    for (const option of def.options) {
+      if (option === def.default) continue;
+      check(`instruction ${key}="${option}" reaches the engine`,
+        fingerprint((t) => { t.instructions = { ...t.instructions, [key]: option }; }) !== base,
+        'the interface offers this setting but the engine never reads it');
+    }
+  }
+  for (const roleId of ['ST_POACHER', 'ST_TARGET', 'ST_FALSE', 'ST_PRESS']) {
+    const slots = FORMATIONS[home.tactic.formation].slots;
+    const applies = slots.some((s) => ROLES[roleId].pos.includes(s.pos));
+    if (!applies) continue;
+    check(`role ${roleId} changes the simulation`, fingerprint((t) => {
+      t.assignments.forEach((a, i) => {
+        if (ROLES[roleId].pos.includes(slots[i].pos)) { a.role = roleId; a.duty = ROLES[roleId].duties[ROLES[roleId].duties.length - 1]; }
+      });
+    }) !== base);
+  }
+  for (const focus of TRAINING_FOCUSES) {
+    if (focus.id === 'Balanced') continue;
+    check(`training focus "${focus.id}" targets different attributes`, Object.keys(focus.emphasis).length > 0);
+  }
+}
+
+// --- Development: the rate and the spending have to agree --------------------
+{
+  // A development system computes how much a player improves, then picks which
+  // attribute to spend it on. If the spending lands on attributes the player's
+  // position ignores, the rate is a lie and prospects stall for years while
+  // every individual number looks fine. Assert the share, not the magnitude.
+  const rng = new Rng(31337);
+  const club = Object.values(world.clubs)[0];
+  const make = (age, ca, pa, minutes) => {
+    const p = generatePlayer(rng, { nationId: 'ALB', pos: 'ST', age, targetCA: ca, targetPA: pa, clubRep: 75, leagueRep: 85 });
+    p.season.minutes = minutes;
+    return p;
+  };
+  // Test the relationships, not one fitted number: a bigger gap, a younger
+  // player and more football all have to mean faster progress, and the
+  // ordinary case has to stay ordinary.
+  const typical = make(18, 105, 140, 900);
+  const generational = make(18, 95, 175, 900);
+  const nearCeiling = make(18, 132, 140, 900);
+  const pastPeak = make(26, 105, 140, 900);
+  const benched = make(18, 105, 140, 0);
+  const perYear = (p) => developmentRate(world, club, p) * 52;
+
+  check('an ordinary prospect improves at an ordinary rate', perYear(typical) > 2 && perYear(typical) < 12,
+    `${perYear(typical).toFixed(1)} attribute points a year`);
+  check('a bigger gap to potential means faster progress', perYear(generational) > perYear(typical));
+  check('the very best prospects are still bounded', perYear(generational) < 22,
+    `${perYear(generational).toFixed(1)} attribute points a year`);
+  check('progress slows as a player nears his ceiling', perYear(nearCeiling) < perYear(typical));
+  check('the same player improves more slowly at 26 than at 18', perYear(pastPeak) < perYear(typical));
+  check('playing regularly beats not playing', perYear(typical) > perYear(benched));
+  record('prospect development', `typical ${perYear(typical).toFixed(1)}, generational ${perYear(generational).toFixed(1)} pts/yr`);
+  const prospect = generational;
+
+  // Spend a few thousand points and see where they actually land.
+  const before = { ...prospect.attrs };
+  let ticks = 0;
+  for (let i = 0; i < 2600; i++) { trainPlayer(rng, world, club, prospect); ticks++; }
+  let relevant = 0;
+  let total = 0;
+  for (const attr in prospect.attrs) {
+    const delta = prospect.attrs[attr] - before[attr];
+    if (delta <= 0) continue;
+    total += delta;
+    if (POSITION_WEIGHTS.ST[attr]) relevant += delta;
+  }
+  const share = total ? relevant / total : 0;
+  check('development lands on attributes the position actually uses', share >= 0.7,
+    `only ${(share * 100).toFixed(0)}% of gains were on striker attributes`);
+  record('useful share of development', `${(share * 100).toFixed(0)}%`);
+  check('a player cannot train past his potential', currentAbility(prospect) <= prospect.pa + 2,
+    `reached ${currentAbility(prospect)} against a ceiling of ${prospect.pa}`);
+
+  // Decline is the same system in reverse and has to behave too.
+  const veteran = generatePlayer(rng, {
+    nationId: 'ALB', pos: 'DC', age: 34, targetCA: 130, targetPA: 130, clubRep: 75, leagueRep: 85,
+  });
+  veteran.season.minutes = 2000;
+  const older = generatePlayer(rng, {
+    nationId: 'ALB', pos: 'DC', age: 37, targetCA: 130, targetPA: 130, clubRep: 75, leagueRep: 85,
+  });
+  older.season.minutes = 2000;
+  check('players decline after their peak', developmentRate(world, club, veteran) < 0);
+  check('decline accelerates with age',
+    developmentRate(world, club, older) < developmentRate(world, club, veteran));
+}
+
 // --- A full season -----------------------------------------------------------
 {
   const game = newGame({ seed: 1717, size: 'small', managerName: 'Test', clubId: null });
@@ -159,26 +285,51 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   game.world.clubs[game.userClubId].isUserClub = true;
 
   let guard = 0;
+  let userFixturesPlayed = 0;
   while (game.day < SEASON_DAYS - 1 && guard++ < 420) {
     const r = advanceDay(game);
     if (r.stopped && r.reason === 'userMatch') {
       playFixture(game, game.fixtures[game.pendingMatchId]);
       game.status = 'idle';
       game.pendingMatchId = null;
+      userFixturesPlayed++;
     }
     if (r.stopped && r.reason === 'seasonRollover') break;
   }
   const table = sortTable(league.table);
-  check('every club played a full league season', table.every((r) => r.p === league.teams - 1 || r.p === (league.teams - 1) * 2),
-    `played counts: ${[...new Set(table.map((r) => r.p))].join(',')}`);
+  // Assert the exact number of games, not "one of two plausible numbers" — an
+  // OR here would pass a season that stalled halfway and never advanced.
+  const expectedGames = (league.teams - 1) * 2;
+  check('every club played a full league season', table.every((r) => r.p === expectedGames),
+    `expected ${expectedGames} each, saw ${[...new Set(table.map((r) => r.p))].join(',')}`);
+  check('the season actually advanced the calendar', game.day >= SEASON_DAYS - 2, `stopped on day ${game.day}`);
+  check('the user played a full set of fixtures', userFixturesPlayed >= expectedGames,
+    `only ${userFixturesPlayed} user matches`);
   check('league points reconcile with results', table.every((r) => r.pts === r.w * 3 + r.d));
   check('wins, draws and losses sum to games played', table.every((r) => r.w + r.d + r.l === r.p));
   const goalsFor = table.reduce((a, r) => a + r.gf, 0);
   const goalsAgainst = table.reduce((a, r) => a + r.ga, 0);
   check('goals scored equal goals conceded across the division', goalsFor === goalsAgainst);
+  // Every competition that has played all its fixtures must have settled. The
+  // user's own match is played after the day advances, so a round they complete
+  // themselves takes a different code path from every other result — a cup
+  // final they win used to be played and then silently forgotten.
+  for (const comp of Object.values(game.world.competitions)) {
+    const allPlayed = (comp.rounds || []).length > 0
+      && comp.rounds.every((r) => r.fixtureIds.every((id) => game.fixtures[id]?.played));
+    if (!allPlayed) continue;
+    check(`${comp.name} settled after its last fixture`, !!comp.winner,
+      'every fixture was played but no winner was recorded');
+  }
   check('the domestic cup produced a winner', !!game.world.competitions[`${game.world.clubs[game.userClubId].nation}_CUP`].winner);
   check('the continental cup produced a winner', !!game.world.competitions.CONT_CUP.winner);
   check('the transfer market was active', game.transferLog.length > 150, `${game.transferLog.length} deals`);
+  record('league games each', expectedGames);
+  record('user matches played', userFixturesPlayed);
+  record('season ended on day', game.day);
+  record('transfers completed', game.transferLog.length);
+  record('goals across the division', table.reduce((a, r) => a + r.gf, 0));
+  record('inbox items generated', game.inbox.length);
 
   // Save round trip.
   const json = JSON.stringify(serialiseGame(game));
@@ -201,6 +352,65 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('no club is left without a squad', Math.min(...squads) >= 16, `smallest squad ${Math.min(...squads)}`);
 }
 
+// --- The pyramid has edges ---------------------------------------------------
+{
+  // The world can be generated with one, two or three divisions per nation, so
+  // the bottom division has nowhere to relegate to and the top nowhere to be
+  // promoted from. Code written for a middle division keeps running there
+  // without error, showing zones and setting board expectations that the game
+  // will never act on.
+  for (const size of ['small', 'large']) {
+    const w = generateWorld({ seed: 77, size });
+    for (const l of w.leagues) {
+      const z = leagueZones(l);
+      check(`${size}: ${l.name} only shows a relegation zone if there is somewhere to go`,
+        !(z.relegation > 0 && !l.hasDivisionBelow));
+      check(`${size}: ${l.name} only shows a promotion zone if there is somewhere to go`,
+        !(z.promotion > 0 && !l.hasDivisionAbove));
+    }
+    const stranded = Object.values(w.clubs).filter((c) => {
+      const l = w.leagues.find((x) => x.id === c.leagueId);
+      return l && !l.hasDivisionBelow && c.board.expectation.type === 'survive';
+    });
+    check(`${size}: no board demands survival in a division with no drop`, stranded.length === 0,
+      `${stranded.length} clubs asked to avoid impossible relegation`);
+  }
+}
+
+// --- The world has to stay worth playing in ----------------------------------
+{
+  // Development, ageing, retirement and squad turnover all pull in different
+  // directions. Assert the composition — that the standard of the top flight
+  // holds up — rather than any single rate, which gets retuned and deleted.
+  const g = newGame({ seed: 2468, size: 'small', managerName: 'Drift', clubId: null });
+  const top = g.world.leagues.find((l) => l.tier === 1);
+  const strength = () => {
+    const s = top.clubIds.map((id) => squadStrength(g.world, g.world.clubs[id])).sort((a, b) => a - b);
+    return s[Math.floor(s.length / 2)];
+  };
+  const startStrength = strength();
+  for (let s = 0; s < 3; s++) {
+    let guard = 0;
+    while (g.day < SEASON_DAYS - 1 && guard++ < 420) {
+      const r = advanceDay(g);
+      if (r.stopped && r.reason === 'seasonRollover') break;
+    }
+    endSeason(g);
+    rolloverSeason(g);
+  }
+  const endStrength = strength();
+  const drift = (endStrength - startStrength) / startStrength;
+  check('the top flight does not hollow out over successive seasons', drift > -0.1,
+    `median squad strength ${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)} (${(drift * 100).toFixed(1)}%)`);
+  check('the top flight does not inflate either', drift < 0.1,
+    `median squad strength ${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)}`);
+  record('top-flight drift over 3 seasons', `${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)} (${(drift * 100).toFixed(1)}%)`);
+  const ages = Object.values(g.world.clubs).flatMap((c) => c.squad.map((id) => g.world.players[id].age));
+  const meanAge = ages.reduce((a, b) => a + b, 0) / ages.length;
+  check('squads keep a sensible age profile', meanAge > 21 && meanAge < 28, `mean age ${meanAge.toFixed(1)}`);
+  record('mean squad age after 3 seasons', meanAge.toFixed(1));
+}
+
 // --- Custom player library ---------------------------------------------------
 {
   const p = validateCustomPlayer({ last: 'Test', attrs: { finishing: 99, pace: -4 }, positions: ['ST'], age: 200, pa: 1 });
@@ -215,6 +425,8 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
 }
 
 console.log(`\n\n${passed} passed, ${failed} failed`);
+console.log('\nQuantities worth eyeballing (a verdict alone cannot tell you a harness tested nothing):');
+for (const [label, value] of Object.entries(observed)) console.log(`  ${label.padEnd(34)} ${value}`);
 if (failures.length) {
   console.log('\nFailures:');
   for (const f of failures) console.log(`  - ${f}`);

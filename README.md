@@ -25,10 +25,14 @@ Settings in the sidebar control whether Continue skips ahead to the next thing t
 you or moves one day at a time, plus default match speed and autosave.
 
 ```bash
-npm test          # 1,287 assertions: generation, scheduling, match rates, a full season, saves
-npm run season    # simulate whole seasons headlessly and print tables, scorers, transfers
-node tools/calibrate.js 1000   # match engine rates against real-world targets
+npm test                       # 1,403 assertions (see Validation below)
+npm run season                 # whole seasons headlessly: tables, scorers, transfers
+node tools/calibrate.js 1400   # match engine rates against real-world targets
+node tools/ablate.js 1500      # does each tactical setting actually change anything?
 ```
+
+It is also laid out for phones — the sidebar becomes a scrolling strip and everything
+runs in a single column below 760px.
 
 ---
 
@@ -115,26 +119,46 @@ The engine is tuned against real top-flight rates. Measured over 1,400 simulated
 
 | Metric | Touchline | Real top flight |
 |---|---|---|
-| Goals per match | 2.79 | ~2.75 |
-| Shots per team | 12.2 | ~12.6 |
+| Goals per match | 2.76 | ~2.75 |
+| Shots per team | 12.3 | ~12.6 |
 | Shots on target per team | 4.7 | ~4.4 |
 | Corners per team | 5.0 | ~5.0 |
-| Fouls per team | 10.9 | ~10.8 |
+| Fouls per team | 10.8 | ~10.8 |
 | Yellow cards per team | 1.8 | ~1.9 |
-| Red cards per match | 0.10 | ~0.08 |
-| Penalties per match | 0.25 | ~0.26 |
-| Home / draw / away | 46 / 23 / 31 | ~44 / 25 / 31 |
+| Red cards per match | 0.09 | ~0.08 |
+| Penalties per match | 0.26 | ~0.26 |
+| Home / draw / away | 44 / 23 / 33 | ~44 / 25 / 31 |
 
-Two known divergences, both deliberate trade-offs rather than oversights:
+Two known divergences, both honest limits rather than oversights:
 
 - **Possession spread is narrower than real football.** Match-to-match possession varies
   less than in the real game, because AI clubs all play reasonably similar default tactics.
   Setting short passing and a low tempo yourself widens it considerably.
 - **Heavy defeats are somewhat more common** than in a real Premier League season (about
-  6% of matches finish with a four-goal margin against a real ~4%). Generated divisions
+  5.5% of matches finish with a four-goal margin against a real ~4%). Generated divisions
   have a wider quality spread than a real top flight, so mismatches are more common.
 
 `node tools/calibrate.js` reprints the whole table against its targets at any time.
+
+### Do the tactics actually do anything?
+
+Every setting the interface offers is measured, not asserted. `tools/ablate.js` runs
+matched samples — same two clubs, same opposition, one setting changed — and reports the
+spread across each scale against a noise floor scaled to the sample size:
+
+```
+12 of 12 tactical settings measurably change how the side plays.
+```
+
+This check found three settings (time wasting, the offside trap and attacking focus) that
+the interface offered and the engine never read at all, and three more whose effect was
+too small to measure. They now trade something real: width buys chance volume at the cost
+of chance quality, a high line squeezes the opposition's build-up but concedes better
+chances and more counters, an offside trap cuts shots faced from 11.5 to 10.4 but makes
+the ones that beat it more dangerous.
+
+Every modifier is neutral at its default setting, so making them matter left the
+calibration table above unchanged.
 
 ---
 
@@ -162,6 +186,26 @@ in localStorage. Both export to JSON files.
 
 ---
 
+## Validation
+
+Three instruments, answering different questions:
+
+- **`npm test`** — 1,403 assertions. Determinism; generated players landing on their target
+  ability; fixture lists and knockout brackets being well formed; match rates matching real
+  football; a full season reconciling (points = 3W+D, goals for = goals against across a
+  division, every competition settled); saves round-tripping attributes, statistics,
+  contracts and the random stream. It prints its key quantities as well as a verdict,
+  because a pass alone cannot tell you a harness tested nothing.
+- **`tools/calibrate.js`** — is the football realistic?
+- **`tools/ablate.js`** — do the manager's decisions change anything?
+
+Plus a browser pass driving real play: a full season through the interface, save and
+reload, substitutions and team talks during a live match, sacking and the job market, and
+a 390px phone viewport with touch.
+
+Some things none of these can see, closed by hand instead: whether it is enjoyable,
+whether the pacing feels right, and how it reads on a real phone in real light.
+
 ## Known limitations
 
 - **Loans are modelled but not exposed.** The data model carries loan fields; neither the
@@ -176,3 +220,8 @@ in localStorage. Both export to JSON files.
   means you have to trim if you want the next crop.
 - **Simulating a full season takes 15-20 seconds** on a small world. Day-to-day play is
   instant; only skipping a whole season at once is slow.
+- **The top flight drifts down slowly over a long save** — around 2% of squad strength
+  over three seasons, flattening after that. Most prospects never fully realise their
+  potential, which is true to life but means development does not quite replace what
+  ageing removes. Matches are decided on relative strength, so play is unaffected; a test
+  bounds the drift so it cannot get worse unnoticed.

@@ -133,7 +133,14 @@ export function teamStrength(lineup, tactic, opts = {}) {
     keeperRating: keeperRating(gkEntry ? gkEntry.player : null),
     mentality,
     instr,
-    idx: { tempo: iTempo, width: iWidth, press: iPress, line: iLine, pass: iPass },
+    idx: {
+      tempo: iTempo, width: iWidth, press: iPress, line: iLine, pass: iPass,
+      tackling: instrIndex(instr, 'tackling'),
+      timeWasting: instrIndex(instr, 'timeWasting'),
+      offsideTrap: instr.offsideTrap === 'Yes' ? 1 : 0,
+      counter: instr.counter === 'Yes' ? 1 : 0,
+      focus: instr.focus ?? 'Mixed',
+    },
     cohesion,
   };
 }
