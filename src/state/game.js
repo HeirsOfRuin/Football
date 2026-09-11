@@ -93,6 +93,11 @@ export function takeOverClub(game, clubId, managerName, managerNat) {
   game.userClubId = clubId;
   if (managerName) game.manager.name = managerName;
   if (managerNat) game.manager.nat = managerNat;
+  // Taking a job at a big club lifts your standing in the game; it does not
+  // drop it if you move down, since the record you built stays with you.
+  game.manager.reputation = clamp(
+    Math.max(game.manager.reputation, remap(club.rep, 20, 99, 12, 86) * 0.7), 1, 100,
+  );
   club.manager = {
     name: game.manager.name, nat: game.manager.nat, style: 'Manager',
     attacking: 12, defending: 12, tactical: 12, manManagement: 12,
@@ -447,11 +452,33 @@ export function advanceDay(game) {
     return { stopped: true, reason: 'userMatch', fixture: userFixture };
   }
 
+  // A monthly read on where the manager stands with the board.
+  if (date.dayOfMonth === 2 && game.day > 90) checkBoardMood(game);
+
   // Youth intake and end-of-season milestones.
   if (game.day === 268) runYouthIntake(game, dayRng);
   if (game.day === KEY_DAYS.boardReview) return { stopped: true, reason: 'seasonReview' };
 
   return { stopped: false };
+}
+
+function checkBoardMood(game) {
+  const club = userClub(game);
+  if (!club) return;
+  const league = game.world.leagues.find((l) => l.id === club.leagueId);
+  if (!league) return;
+  const table = sortTable(league.table);
+  const pos = table.findIndex((r) => r.clubId === club.id) + 1;
+  if (!pos) return;
+  updateBoardConfidence(game, club, pos, league.teams);
+  if (club.board.confidence < 26 && !club.board.warned) {
+    club.board.warned = true;
+    news(game, 'board', 'The board are losing patience',
+      `You were asked to ${club.board.expectation.label.toLowerCase()}. Sitting ${pos} of ${league.teams}, `
+      + 'the board have made clear they expect a marked improvement before the end of the season.');
+  } else if (club.board.confidence > 45) {
+    club.board.warned = false;
+  }
 }
 
 function tickPlayers(game, rng) {
@@ -748,6 +775,12 @@ export function endSeason(game) {
     const league = world.leagues.find((l) => l.id === user.leagueId);
     const verdict = seasonVerdict(game, user, user.lastFinish, league?.teams ?? 20);
     summary.userVerdict = verdict;
+    // The board's patience is finite. Miss their expectation badly enough and
+    // the job goes to someone else.
+    if (user.board.confidence < 18) {
+      summary.sacked = true;
+      summary.sackedFrom = user.name;
+    }
     game.manager.history.push({
       season: game.season, year: world.year, club: user.name,
       league: league?.name, position: user.lastFinish,
@@ -833,6 +866,51 @@ function resolvePlayoff(game, poolIds, rng) {
   if (winner) winner.history.push({ season: game.season, year: world.year, achievement: 'Won the promotion play-offs' });
   return remaining[0];
 }
+
+/**
+ * The board dismisses the manager. The club carries on under someone new and
+ * the manager is left looking for work.
+ */
+export function sackManager(game) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club) return;
+  const rng = subRng(game.rng, `sack:${game.season}`);
+  club.isUserClub = false;
+  club.board.confidence = 52;
+  club.board.warned = false;
+  const { makeManagerName } = MANAGER_NAME_MODULE;
+  const n = makeManagerName(rng, club.nation);
+  club.manager = {
+    name: n.full, nat: club.nation, style: n.style,
+    attacking: 12, defending: 12, tactical: 12, manManagement: 12,
+    youthDev: 12, discipline: 12, reputation: club.rep - 10, yearsAtClub: 0,
+  };
+  game.userClubId = null;
+  game.manager.reputation = clamp(game.manager.reputation - 8, 1, 100);
+  news(game, 'board', 'You have been dismissed',
+    `${club.name} have terminated your contract. The board thanked you for your efforts but felt a change was needed.`);
+}
+
+/** Clubs that would consider hiring this manager, best first. */
+export function availableJobs(game) {
+  const world = game.world;
+  const rep = game.manager.reputation;
+  const jobs = [];
+  for (const club of Object.values(world.clubs)) {
+    if (club.isUserClub) continue;
+    const league = world.leagues.find((l) => l.id === club.leagueId);
+    if (!league) continue;
+    // A club will look at a manager whose standing is near their own.
+    const ceiling = rep + 22;
+    const clubStanding = remap(club.rep, 20, 99, 8, 95);
+    if (clubStanding > ceiling) continue;
+    jobs.push({ club, league, standing: clubStanding });
+  }
+  return sortBy(jobs, { key: (j) => j.standing, desc: true }).slice(0, 40);
+}
+
+import * as MANAGER_NAME_MODULE from '../gen/names.js';
 
 /** Move the world on a year: ages, contracts, retirements, new schedules. */
 export function rolloverSeason(game) {

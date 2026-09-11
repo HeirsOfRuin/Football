@@ -1,6 +1,6 @@
 // Application shell: navigation, the Continue loop, saving and screen routing.
 
-import { newGame, advanceDay, endSeason, rolloverSeason, userClub, nextFixtureFor, playFixture } from '../state/game.js';
+import { newGame, advanceDay, endSeason, rolloverSeason, userClub, nextFixtureFor, playFixture, sackManager, availableJobs, takeOverClub } from '../state/game.js';
 import { SEASON_DAYS, KEY_DAYS, formatDay, transferWindowOpen } from '../core/calendar.js';
 import { saveGame, loadGame, listSaves, deleteSave, loadSettings, saveSettings, exportGameFile, importGameFile } from '../state/store.js';
 import { unreadCount } from '../engine/news.js';
@@ -199,6 +199,16 @@ export const app = {
     this.autosave();
   },
 
+  async openJobMarket() {
+    const { showJobMarket } = await import('./screens/seasonreview.js');
+    showJobMarket(this, availableJobs(this.game), (clubId) => {
+      takeOverClub(this.game, clubId, this.game.manager.name, this.game.manager.nat);
+      this.go('dashboard');
+      this.autosave();
+      toast(`You are the new manager of ${this.game.world.clubs[clubId].name}.`);
+    });
+  },
+
   startMatch(fixture) {
     this.matchState = null;
     this.go('match', { fixtureId: fixture.id });
@@ -220,8 +230,15 @@ export const app = {
     }
     const summary = endSeason(game);
     this.busy = false;
-    const { showSeasonReview } = await import('./screens/seasonreview.js');
+    const { showSeasonReview, showSackNotice, showJobMarket } = await import('./screens/seasonreview.js');
     showSeasonReview(this, summary, () => {
+      if (summary.sacked) {
+        const from = summary.sackedFrom;
+        sackManager(game);
+        rolloverSeason(game);
+        showSackNotice(this, from, () => this.openJobMarket());
+        return;
+      }
       rolloverSeason(game);
       this.go('dashboard');
       this.autosave();

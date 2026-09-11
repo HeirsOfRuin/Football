@@ -92,8 +92,9 @@ function relevanceMap(pos) {
   for (const attr of ALL_ATTRS) {
     if (isGk && OUTFIELD_ONLY.has(attr)) { map[attr] = 0.12; continue; }
     if (!isGk && GK_ATTRS.has(attr)) { map[attr] = 0; continue; }
-    const w = weights[attr] || 0;
-    map[attr] = w > 0 ? 0.55 + 0.45 * (w / maxW) : 0.4;
+    // Every attribute the position actually uses scales together; otherwise the
+    // weighted average saturates and very high targets become unreachable.
+    map[attr] = (weights[attr] || 0) > 0 ? 1 : 0.4;
   }
   return map;
 }
@@ -143,22 +144,38 @@ function applyScale(shape, relevance, p) {
   return out;
 }
 
-/** Solve for the scale that lands the shape on targetCA at the given position. */
+/**
+ * Solve for the scale that lands the shape on targetCA at the given position.
+ * The binary search works on floats; rounding to whole attributes then moves
+ * the result a little, so a short correction pass nudges the most relevant
+ * attributes until the integer attribute set hits the target.
+ */
 function solveToTarget(shape, pos, targetCA) {
   const relevance = relevanceMap(pos);
-  let lo = -0.98;
-  let hi = 0.98;
+  let lo = -0.995;
+  let hi = 0.995;
   let best = shape;
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 30; i++) {
     const mid = (lo + hi) / 2;
     const cand = applyScale(shape, relevance, mid);
-    const ca = abilityForPosition(cand, pos);
     best = cand;
-    if (ca < targetCA) lo = mid;
+    if (abilityForPosition(cand, pos) < targetCA) lo = mid;
     else hi = mid;
   }
   const rounded = {};
   for (const attr in best) rounded[attr] = clamp(Math.round(best[attr]), 1, 20);
+
+  const weights = POSITION_WEIGHTS[pos] || {};
+  const tuneable = Object.keys(weights).sort((a, b) => weights[b] - weights[a]);
+  let ca = abilityForPosition(rounded, pos);
+  for (let guard = 0; Math.abs(ca - targetCA) > 1 && guard < 120; guard++) {
+    const dir = ca < targetCA ? 1 : -1;
+    const attr = tuneable[guard % tuneable.length];
+    const next = rounded[attr] + dir;
+    if (next < 1 || next > 20) continue;
+    rounded[attr] = next;
+    ca = abilityForPosition(rounded, pos);
+  }
   return rounded;
 }
 

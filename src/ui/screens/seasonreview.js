@@ -2,6 +2,7 @@
 
 import { esc, openModal, money, badge, panelTight, emptyState } from '../components.js';
 import { userClub, sortTable } from '../../state/game.js';
+import { squadStrength } from '../../gen/worldgen.js';
 import { sortBy } from '../../core/util.js';
 import { currentAbility } from '../../data/attributes.js';
 
@@ -62,6 +63,56 @@ export function showSeasonReview(app, summary, onContinue) {
     footer: '<button class="primary" data-act="next">Start next season</button>',
     onMount(modal, close) {
       modal.querySelector('[data-act="next"]').onclick = () => { close(); onContinue(); };
+    },
+  });
+}
+
+
+/** Told the board has let you go. */
+export function showSackNotice(app, clubName, onContinue) {
+  openModal({
+    title: 'Dismissed',
+    narrow: true,
+    body: `<p style="font-size:15px">${esc(clubName)} have relieved you of your duties.</p>
+      <p class="muted">The board set an expectation at the start of the season and concluded you were not going to meet it.
+      Your record follows you: your reputation determines which clubs will consider you next.</p>
+      <p class="small faint">Manager reputation: ${Math.round(app.game.manager.reputation)}</p>`,
+    footer: '<button class="primary" data-act="jobs">Look for work</button>',
+    onMount(modal, close) {
+      modal.querySelector('[data-act="jobs"]').onclick = () => { close(); onContinue(); };
+    },
+  });
+}
+
+/** Pick a new club from those willing to consider you. */
+export function showJobMarket(app, jobs, onTake) {
+  const world = app.game.world;
+  openModal({
+    title: 'Vacancies',
+    wide: true,
+    body: jobs.length === 0
+      ? '<p>No club will consider you at present. Your career is over — for this save at least.</p>'
+      : `<p class="small faint" style="margin-top:0">Clubs within reach of a manager of your standing. Taking a lower job and
+         succeeding is the way back up.</p>
+      <div class="scroll-y" style="max-height:440px"><table><thead><tr>
+        <th></th><th>Club</th><th>Division</th><th class="num">Reputation</th><th class="num">Squad</th>
+        <th class="num">Transfer budget</th><th>Expectation</th><th></th></tr></thead><tbody>
+      ${jobs.map((j) => `<tr>
+        <td>${badge(j.club, 20)}</td>
+        <td class="nowrap">${esc(j.club.name)}</td>
+        <td class="small faint">${esc(j.league.name)}</td>
+        <td class="num">${j.club.rep}</td>
+        <td class="num">${Math.round(squadStrength(world, j.club))}</td>
+        <td class="num">${money(j.club.finances.transferBudget)}</td>
+        <td class="small">${esc(j.club.board.expectation.label)}</td>
+        <td><button class="sm primary" data-take="${esc(j.club.id)}">Accept</button></td>
+      </tr>`).join('')}</tbody></table></div>`,
+    footer: '<button data-act="menu">Retire to the main menu</button>',
+    onMount(modal, close) {
+      modal.querySelectorAll('[data-take]').forEach((b) => {
+        b.onclick = () => { close(); onTake(b.dataset.take); };
+      });
+      modal.querySelector('[data-act="menu"]').onclick = () => { close(); app.go('menu'); };
     },
   });
 }
