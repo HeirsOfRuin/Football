@@ -12,6 +12,7 @@ import * as libraryScreen from './screens/library.js';
 import * as dashboardScreen from './screens/dashboard.js';
 import * as squadScreen from './screens/squad.js';
 import * as tacticsScreen from './screens/tactics.js';
+import * as trainingScreen from './screens/training.js';
 import * as fixturesScreen from './screens/fixtures.js';
 import * as leagueScreen from './screens/league.js';
 import * as transfersScreen from './screens/transfers.js';
@@ -27,6 +28,7 @@ const SCREENS = {
   dashboard: dashboardScreen,
   squad: squadScreen,
   tactics: tacticsScreen,
+  training: trainingScreen,
   fixtures: fixturesScreen,
   league: leagueScreen,
   transfers: transfersScreen,
@@ -43,6 +45,7 @@ const NAV = [
   { sep: true },
   { id: 'squad', label: 'Squad' },
   { id: 'tactics', label: 'Tactics' },
+  { id: 'training', label: 'Training' },
   { id: 'club', label: 'Club' },
   { sep: true },
   { id: 'fixtures', label: 'Fixtures' },

@@ -172,7 +172,12 @@ export function invalidateAbility(player) {
 }
 
 /** Familiarity 0-20 with a position, from the player's natural positions. */
-export function familiarity(player, pos) {
+/**
+ * Familiarity a player is born with: how close the position is to one he
+ * naturally plays. Split out from familiarity() because training needs to know
+ * what a player started with, separately from what he has been taught.
+ */
+export function familiarityFromAffinity(player, pos) {
   let best = 0;
   for (const natural of player.positions) {
     const aff = (POSITION_AFFINITY[natural] || {})[pos] || 0;
@@ -182,6 +187,23 @@ export function familiarity(player, pos) {
   const vers = (player.hidden?.versatility ?? 10) / 20;
   const lifted = best + (1 - best) * vers * 0.35;
   return Math.round(lifted * 20);
+}
+
+/**
+ * How well a player knows a position, 0-20 — the better of what he was born
+ * with and what he has been trained into. `player.learned` is written only by
+ * position retraining, so for the overwhelming majority of players this is
+ * exactly the affinity figure it has always been.
+ */
+export function familiarity(player, pos) {
+  const natural = familiarityFromAffinity(player, pos);
+  // Retraining is rare and this sits on one of the hottest paths in the game -
+  // every lineup decision and every match tick asks for it. Players who have
+  // never been retrained, which is very nearly all of them, take the early exit.
+  const learned = player.learned;
+  if (!learned) return natural;
+  const taught = learned[pos];
+  return taught > natural ? Math.round(taught) : natural;
 }
 
 export const FAMILIARITY_LABELS = [

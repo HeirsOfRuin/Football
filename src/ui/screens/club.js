@@ -1,16 +1,12 @@
 // Club screen: board, facilities, training and history.
 
-import { esc, panel, panelTight, emptyState, kv, raw, tabs, toast, badge, bar } from '../components.js';
+import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar } from '../components.js';
 import { userClub } from '../../state/game.js';
-import { TRAINING_FOCUSES, TRAINING_INTENSITY, expectedRole, ROLE_LABELS, developmentRate } from '../../engine/training.js';
-import { currentAbility } from '../../data/attributes.js';
-import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { squadStrength } from '../../gen/worldgen.js';
 
 const VIEWS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'training', label: 'Training' },
   { id: 'staff', label: 'Staff & Facilities' },
   { id: 'history', label: 'History' },
   { id: 'manager', label: 'Manager' },
@@ -35,8 +31,7 @@ export function render(app) {
   const league = world.leagues.find((l) => l.id === club.leagueId);
 
   let body;
-  if (state.view === 'training') body = trainingView(app, club);
-  else if (state.view === 'staff') body = staffView(club);
+  if (state.view === 'staff') body = staffView(club);
   else if (state.view === 'history') body = historyView(club);
   else if (state.view === 'manager') body = managerView(app, game);
   else body = overviewView(app, club, league);
@@ -47,14 +42,6 @@ export function render(app) {
       root.querySelectorAll('[data-tab]').forEach((t) => {
         t.onclick = () => { state.view = t.dataset.tab; app.refresh(); };
       });
-      const focus = root.querySelector('#training-focus');
-      if (focus) {
-        focus.onchange = () => { club.trainingFocus = focus.value; toast('Training focus updated.'); app.refresh(); };
-      }
-      const intensity = root.querySelector('#training-intensity');
-      if (intensity) {
-        intensity.onchange = () => { club.trainingIntensity = intensity.value; toast('Training intensity updated.'); app.refresh(); };
-      }
       root.querySelectorAll('[data-player]').forEach((el) => {
         el.onclick = () => showPlayer(app, el.dataset.player);
       });
@@ -86,43 +73,6 @@ function overviewView(app, club, league) {
   ])}
     <p class="small faint" style="margin-bottom:0">The board review your position at the end of each season.
       Sustained failure against their expectation costs you the job.</p>`)}
-  </div>`;
-}
-
-function trainingView(app, club) {
-  const world = app.game.world;
-  const focus = TRAINING_FOCUSES.find((f) => f.id === (club.trainingFocus || 'Balanced'));
-  const squad = club.squad.map((id) => world.players[id]).filter(Boolean);
-  const developing = sortBy(squad, { key: (p) => developmentRate(world, club, p), desc: true }).slice(0, 12);
-
-  return `<div class="grid c1-2">
-    ${panel('Programme', `
-      <div class="field"><label>Focus</label><select id="training-focus">
-        ${TRAINING_FOCUSES.map((f) => `<option value="${f.id}" ${f.id === (club.trainingFocus || 'Balanced') ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}
-      </select></div>
-      <div class="field"><label>Intensity</label><select id="training-intensity">
-        ${TRAINING_INTENSITY.map((i) => `<option ${i === (club.trainingIntensity || 'Normal') ? 'selected' : ''}>${esc(i)}</option>`).join('')}
-      </select></div>
-      <p class="small faint">Focus steers which attributes players work on. Intensity trades faster progress
-        against tiredness and injury risk.</p>
-      ${focus && Object.keys(focus.emphasis).length ? `<p class="small">Emphasis: ${Object.keys(focus.emphasis).join(', ')}</p>` : ''}
-      ${kv([
-    ['Training facilities', `${club.facilities.training}/20 — ${facilityLabel(club.facilities.training)}`],
-    ['Youth facilities', `${club.facilities.youth}/20 — ${facilityLabel(club.facilities.youth)}`],
-  ])}`)}
-    ${panelTight('Progress Report', `<div class="table-wrap"><table>
-      <thead><tr><th>Player</th><th class="num">Age</th><th class="num">Ability</th><th class="num">Potential</th>
-        <th>Trajectory</th><th>Squad role</th><th class="num">Minutes</th></tr></thead>
-      <tbody>${developing.map((p) => {
-    const rate = developmentRate(world, club, p);
-    const traj = rate > 0.09 ? '<span class="good">Rapid</span>' : rate > 0.045 ? '<span class="good">Improving</span>'
-      : rate > 0.005 ? '<span class="muted">Slow</span>' : rate > -0.02 ? '<span class="faint">Static</span>' : '<span class="bad">Declining</span>';
-    return `<tr class="clickable" data-player="${esc(p.id)}">
-        <td class="nowrap">${esc(p.name)}</td><td class="num">${p.age}</td>
-        <td class="num">${currentAbility(p)}</td><td class="num faint">${p.pa}</td>
-        <td class="small">${traj}</td><td class="small faint">${esc(ROLE_LABELS[expectedRole(world, club, p)])}</td>
-        <td class="num">${p.season.minutes}</td></tr>`;
-  }).join('')}</tbody></table></div>`)}
   </div>`;
 }
 

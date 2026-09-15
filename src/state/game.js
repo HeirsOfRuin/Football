@@ -15,15 +15,15 @@ import {
   emptyTableRow, resolveTie, resetFixtureCounter, leagueZones,
 } from '../engine/season.js';
 import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize } from '../engine/finance.js';
-import { trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds } from '../engine/training.js';
+import { trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots } from '../engine/training.js';
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
-import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping } from '../engine/ai.js';
+import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { news, matchHeadline } from '../engine/news.js';
 
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 3;
+export const GAME_VERSION = 4;
 
 export function newGame(opts = {}) {
   const {
@@ -146,6 +146,16 @@ export function startSeason(game, isFirst = false) {
     setSeasonBudgets(game, club, budgetRng);
     club.form = [];
     club.seasonRecord = { w: 0, d: 0, l: 0 };
+    club.training = club.training || { slots: [] };
+    // AI clubs set their own programme each summer. The user's club keeps
+    // whatever the user chose.
+    if (!club.isUserClub) {
+      const plan = aiTrainingPlan(world, club);
+      club.trainingFocus = plan.focus;
+      club.trainingIntensity = plan.intensity;
+    } else {
+      club.trainingIntensity = club.trainingIntensity || 'Normal';
+    }
   }
 
   for (const p of Object.values(world.players)) {
@@ -528,11 +538,26 @@ function tickPlayers(game, rng) {
 
 function runWeeklyTraining(game, rng) {
   const world = game.world;
+  // Individual programmes are looked up per player inside a loop that walks
+  // every player in the world, so the lookup has to be O(1). Building the map
+  // once a week costs one pass over the clubs; doing it per player would undo
+  // the season time Stage 1 bought back.
+  const programmes = new Map();
+  for (const club of Object.values(world.clubs)) {
+    const slots = club.training?.slots;
+    if (!slots?.length) continue;
+    const allowed = trainingSlots(club);
+    for (let i = 0; i < Math.min(slots.length, allowed); i++) {
+      const slot = slots[i];
+      if (slot?.playerId && slot.type) programmes.set(slot.playerId, slot);
+    }
+  }
+
   for (const id in world.players) {
     const p = world.players[id];
     const club = p.clubId ? world.clubs[p.clubId] : null;
     const before = club?.isUserClub ? currentAbility(p) : 0;
-    const changed = trainPlayer(rng, world, club, p);
+    const changed = trainPlayer(rng, world, club, p, programmes.get(id) || null);
     if (changed && club?.isUserClub) {
       const after = currentAbility(p);
       if (after - before >= 4) {

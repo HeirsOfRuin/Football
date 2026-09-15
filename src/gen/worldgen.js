@@ -265,6 +265,11 @@ export function generateWorld(opts = {}) {
             gk: clamp(Math.round(remap(rep, 25, 95, 5, 18) + nRng.normalClamped(0, 2.6, -5, 5)), 1, 20),
           },
           trainingFocus: 'Balanced',
+          // Read by developmentRate and dailyPlayerTick, and until now written by
+          // nothing but the Club screen - so every club in the world ran on the
+          // undefined branch. Derived per club at season start; this is the floor.
+          trainingIntensity: 'Normal',
+          training: { slots: [] },
           board: {
             expectation: null,
             confidence: nRng.int(55, 85),

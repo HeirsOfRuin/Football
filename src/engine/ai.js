@@ -103,6 +103,35 @@ export function seasonVerdict(game, club, position, teams) {
 }
 
 /** AI squad housekeeping between seasons: renew, release, promote youth. */
+/**
+ * What an AI club does with its training programme, derived rather than rolled.
+ *
+ * Derived matters twice over: it makes the choice explicable (a young squad
+ * under a youth developer works hard; an old squad in a congested season does
+ * not), and it consumes no randomness, so adding it does not shift every other
+ * draw in the world and silently re-roll the whole game.
+ */
+export function aiTrainingPlan(world, club) {
+  const squad = club.squad.map((id) => world.players[id]).filter(Boolean);
+  if (!squad.length) return { focus: club.trainingFocus || 'Balanced', intensity: 'Normal' };
+  const avgAge = squad.reduce((a, p) => a + p.age, 0) / squad.length;
+  const youthMinded = (club.manager?.youthDev ?? 10) >= 13 || club.board?.wantsYouth;
+
+  // Hard work suits a young squad and a manager who believes in it; an ageing
+  // squad breaks under it, which is exactly the trade the setting now carries.
+  let intensity = 'Normal';
+  if (avgAge <= 24.6 && youthMinded) intensity = 'Intense';
+  else if (avgAge >= 28.2) intensity = 'Light';
+
+  // Focus follows what the board asked for, then the manager's own leaning.
+  let focus = 'Balanced';
+  if (club.board?.wantsAttacking) focus = 'Attacking';
+  else if ((club.manager?.defending ?? 10) > (club.manager?.attacking ?? 10) + 3) focus = 'Defending';
+  else if ((club.manager?.attacking ?? 10) > (club.manager?.defending ?? 10) + 3) focus = 'Possession';
+  else if (avgAge >= 28) focus = 'Fitness';
+  return { focus, intensity };
+}
+
 export function aiSquadHousekeeping(game, club, rng, helpers) {
   const world = game.world;
   const { renewContract, releasePlayer, contractDemand } = helpers;

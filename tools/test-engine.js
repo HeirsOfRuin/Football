@@ -7,12 +7,18 @@
 import { Rng } from '../src/core/rng.js';
 import { generateWorld, squadStrength } from '../src/gen/worldgen.js';
 import { generatePlayer } from '../src/gen/playergen.js';
-import { abilityForPosition, currentAbility, ALL_ATTRS, POSITION_WEIGHTS } from '../src/data/attributes.js';
+import {
+  abilityForPosition, currentAbility, ALL_ATTRS, POSITION_WEIGHTS, ATTR_GROUPS,
+  familiarity, familiarityFromAffinity, positionEffectiveness,
+} from '../src/data/attributes.js';
 import { simulateMatch } from '../src/engine/match.js';
 import { autoPick, autoAssignSpecialists, buildLineup } from '../src/engine/lineup.js';
 import { roundRobin, drawKnockoutRound, sortTable, leagueZones } from '../src/engine/season.js';
 import { MENTALITIES, INSTRUCTION_DEFS, FORMATIONS, ROLES } from '../src/data/tactics.js';
-import { TRAINING_FOCUSES, developmentRate, trainPlayer } from '../src/engine/training.js';
+import {
+  TRAINING_FOCUSES, developmentRate, trainPlayer, trainingSlots, retrainingStep,
+  applyMentoring, PROGRAMME_TYPES,
+} from '../src/engine/training.js';
 import { newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -362,6 +368,114 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('a new season schedules fixtures', Object.keys(game.fixtures).length > 1000);
   const squads = Object.values(game.world.clubs).map((c) => c.squad.length);
   check('no club is left without a squad', Math.min(...squads) >= 16, `smallest squad ${Math.min(...squads)}`);
+}
+
+// --- Training: the settings have to do something -----------------------------
+{
+  // The defect this replaces: intensity was read by the engine and written by
+  // nothing but the Club screen, so every club in the world ran on undefined.
+  const clubs = Object.values(world.clubs);
+  check('every club is given a training intensity', clubs.every((c) => c.trainingIntensity));
+  check('every club is given a training focus', clubs.every((c) => c.trainingFocus));
+  check('every club has a slot list', clubs.every((c) => Array.isArray(c.training?.slots)));
+
+  const slotCounts = clubs.map((c) => trainingSlots(c));
+  check('slot counts stay inside 2-6', Math.min(...slotCounts) >= 2 && Math.max(...slotCounts) <= 6,
+    `range ${Math.min(...slotCounts)}-${Math.max(...slotCounts)}`);
+  // Scarcity has to track the staff, or coaching quality is decoration again.
+  const rich = { coaching: { attacking: 19, defending: 19, fitness: 19, gk: 19 }, facilities: { training: 19 } };
+  const poor = { coaching: { attacking: 3, defending: 3, fitness: 3, gk: 3 }, facilities: { training: 3 } };
+  check('better staff earn more slots', trainingSlots(rich) > trainingSlots(poor),
+    `${trainingSlots(poor)} vs ${trainingSlots(rich)}`);
+  record('individual slots, worst club to best', `${Math.min(...slotCounts)} to ${Math.max(...slotCounts)}`);
+
+  const ordinary = {
+    facilities: { training: 10, youth: 10, scouting: 10, medical: 10 },
+    coaching: { attacking: 10, defending: 10, fitness: 10, gk: 10 },
+    manager: { youthDev: 10 }, trainingFocus: 'Balanced', trainingIntensity: 'Normal',
+  };
+  const makeCohort = (seed, age, pos, n) => {
+    const r = new Rng(seed);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const p = generatePlayer(r, { nationId: 'ALB', pos, age, targetCA: 95, targetPA: 155, clubRep: 70, leagueRep: 82 });
+      p.season.minutes = 1500;
+      out.push(p);
+    }
+    return out;
+  };
+  const runSeason = (players, club, prog, seed) => {
+    const r = new Rng(seed);
+    const before = players.map((p) => ({ ...p.attrs }));
+    for (let w = 0; w < 38; w++) for (const p of players) trainPlayer(r, world, club, p, prog);
+    return (attrs) => {
+      let g = 0;
+      players.forEach((p, i) => { for (const a of attrs) g += p.attrs[a] - before[i][a]; });
+      return g / players.length;
+    };
+  };
+
+  // An individual programme has to aim development, not just claim to.
+  const cohortA = makeCohort(77, 19, 'MC', 60);
+  const cohortB = JSON.parse(JSON.stringify(cohortA));
+  const plainGain = runSeason(cohortA, ordinary, null, 404);
+  const physGain = runSeason(cohortB, ordinary, { type: 'group', target: 'physical' }, 404);
+  const plainPhys = plainGain(ATTR_GROUPS.physical);
+  const aimedPhys = physGain(ATTR_GROUPS.physical);
+  check('an individual programme aims development at its target',
+    aimedPhys > plainPhys * 1.4, `${plainPhys.toFixed(2)} -> ${aimedPhys.toFixed(2)} physical points`);
+  record('physical points a season, untargeted vs targeted', `${plainPhys.toFixed(1)} -> ${aimedPhys.toFixed(1)}`);
+
+  // Intense has to cost something. Its whole point is being a trade.
+  const hard = makeCohort(78, 24, 'MC', 120);
+  const easy = JSON.parse(JSON.stringify(hard));
+  const rHard = new Rng(909);
+  const rEasy = new Rng(909);
+  let hardInjuries = 0;
+  let easyInjuries = 0;
+  for (let w = 0; w < 38; w++) {
+    for (const p of hard) { p.injury = null; trainPlayer(rHard, world, { ...ordinary, trainingIntensity: 'Intense' }, p, null); if (p.injury) hardInjuries++; }
+    for (const p of easy) { p.injury = null; trainPlayer(rEasy, world, ordinary, p, null); if (p.injury) easyInjuries++; }
+  }
+  check('intense training injures players', hardInjuries > 0, `${hardInjuries} over a season`);
+  check('normal training injures nobody', easyInjuries === 0, `${easyInjuries} injuries`);
+  record('training injuries per 120 players, intense vs normal', `${hardInjuries} vs ${easyInjuries}`);
+
+  // Position retraining: the point is that it reaches the match engine.
+  const learner = makeCohort(79, 20, 'MC', 1)[0];
+  const startFam = familiarity(learner, 'DC');
+  const startEff = positionEffectiveness(learner, 'DC');
+  const rLearn = new Rng(31);
+  for (let w = 0; w < 38; w++) trainPlayer(rLearn, world, ordinary, learner, { type: 'position', target: 'DC' });
+  const endFam = familiarity(learner, 'DC');
+  check('retraining raises familiarity', endFam > startFam, `${startFam} -> ${endFam}`);
+  check('retraining moves about one band a season', endFam - startFam >= 3 && endFam - startFam <= 8,
+    `gained ${endFam - startFam} in a season`);
+  check('retraining reaches the match engine', positionEffectiveness(learner, 'DC') > startEff);
+  record('retraining, one season at 20', `familiarity ${startFam} -> ${endFam}`);
+
+  // ...and a player who has never been retrained is completely unaffected.
+  const untaught = makeCohort(80, 24, 'ST', 1)[0];
+  check('an untrained player reads exactly as he always did',
+    familiarity(untaught, 'DC') === familiarityFromAffinity(untaught, 'DC'));
+
+  // Mentoring is the only thing in the game that can move hidden personality.
+  const kid = makeCohort(81, 18, 'MC', 1)[0];
+  kid.hidden.professionalism = 6;
+  const mentor = makeCohort(82, 31, 'MC', 1)[0];
+  mentor.hidden.professionalism = 19;
+  let moved = false;
+  for (let w = 0; w < 38; w++) moved = applyMentoring(kid, mentor) || moved;
+  check('mentoring raises a young professional', kid.hidden.professionalism > 6,
+    `6 -> ${kid.hidden.professionalism.toFixed(1)}`);
+  const peer = makeCohort(83, 19, 'MC', 1)[0];
+  peer.hidden.professionalism = 19;
+  const kid2 = makeCohort(84, 18, 'MC', 1)[0];
+  kid2.hidden.professionalism = 6;
+  applyMentoring(kid2, peer);
+  check('a player his own age is not a mentor', kid2.hidden.professionalism === 6);
+
+  check('every programme type is offered', Object.keys(PROGRAMME_TYPES).length === 4);
 }
 
 // --- Club identity -----------------------------------------------------------

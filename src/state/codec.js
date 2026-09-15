@@ -63,7 +63,30 @@ export function packPlayer(p) {
     ts: p.transferStatus === 'none' ? 0 : p.transferStatus,
     yp: p.youthProduct || null,
     cu: p.custom ? 1 : 0,
+    // Positions taught by retraining. Almost every player has none, so this is
+    // omitted rather than stored as an empty object.
+    ln: packLearned(p.learned),
   };
+}
+
+function packLearned(learned) {
+  if (!learned) return null;
+  const parts = [];
+  for (const pos in learned) {
+    const v = learned[pos];
+    if (v > 0) parts.push(`${pos}:${Math.round(v * 10)}`);
+  }
+  return parts.length ? parts.join('|') : null;
+}
+
+function unpackLearned(str) {
+  if (!str) return null;
+  const out = {};
+  for (const part of String(str).split('|')) {
+    const [pos, v] = part.split(':');
+    if (pos && v) out[pos] = Number(v) / 10;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 const STAT_KEYS = Object.keys(emptyStats());
@@ -117,6 +140,7 @@ export function unpackPlayer(d) {
     suspension: d.su || 0,
     yellowCards: d.yc || 0,
     unhappy: d.un || null,
+    learned: unpackLearned(d.ln),
     contract: d.ct ? {
       wage: d.ct[0], expiresYear: d.ct[1], signedYear: d.ct[2], releaseClause: d.ct[3],
       goalBonus: d.ct[4], appearanceFee: d.ct[5], loanedFrom: d.ct[6] || null,
@@ -227,6 +251,17 @@ export function migrateSave(data) {
       club.identity = IDENTITY_MODULE.fallbackIdentity(club);
       const pal = IDENTITY_MODULE.paletteFor(club.identity);
       club.colours = { primary: pal.primary, secondary: pal.secondary };
+    }
+  }
+  // v3 -> v4: training gained an intensity that is actually set, and individual
+  // slots. Clubs in an older save have neither, and the intensity in particular
+  // was read by the engine while never being written by anything but the UI.
+  if (version < 4 && data.world?.clubs) {
+    for (const id in data.world.clubs) {
+      const club = data.world.clubs[id];
+      club.trainingIntensity = club.trainingIntensity || 'Normal';
+      club.trainingFocus = club.trainingFocus || 'Balanced';
+      club.training = club.training || { slots: [] };
     }
   }
   return { ...data, v: GAME_VERSION };
