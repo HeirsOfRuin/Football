@@ -29,6 +29,9 @@ import { currentAbility } from '../data/attributes.js';
 import {
   marketValue, askingPrice, evaluateOffer, evaluateContract, contractDemand,
 } from './transfers.js';
+import { abilityForReputation } from '../data/nations.js';
+import { weeklyWageBill } from './finance.js';
+import { expectedRole } from './training.js';
 
 /** How long talks stay dead after the other side walks away. */
 export const COOLING_OFF_DAYS = 24;
@@ -67,7 +70,51 @@ export function cashEquivalent(world, player, offer) {
   const resale = marketValue(world, player) * (player.age <= 23 ? 1.35 : player.age <= 27 ? 1 : 0.6);
   const sellOnValue = pct * resale * 0.55;
 
-  return Math.round(deferred + sellOnValue);
+  return Math.round(deferred + sellOnValue + swapValue(world, offer.swap));
+}
+
+/**
+ * What a club takes players in part-exchange at.
+ *
+ * Never full price. They did not ask for these players, they have to pay their
+ * wages, and they carry the risk of not wanting them - so part-exchange is a
+ * way to move a player you are done with, not a way to buy at a discount.
+ */
+export function swapValue(world, ids) {
+  if (!ids?.length) return 0;
+  let total = 0;
+  for (const id of ids) {
+    const p = world.players[id];
+    if (!p) continue;
+    total += marketValue(world, p) * SWAP_DISCOUNT;
+  }
+  return Math.round(total);
+}
+
+/** A part-exchanged player is taken at this share of his market value. */
+export const SWAP_DISCOUNT = 0.7;
+
+/**
+ * Whether a club would even discuss taking a player in part-exchange.
+ *
+ * A club will not take a thirty-five-year-old on a huge wage off your hands
+ * just because the arithmetic works, which is what would happen if swapValue
+ * were the only test.
+ */
+export function willTakeInSwap(world, seller, player) {
+  if (!player?.contract) return { ok: false, reason: 'He has no contract to move.' };
+  if (player.contract.loanedFrom) return { ok: false, reason: 'He is on loan and cannot be traded.' };
+  const ca = currentAbility(player);
+  const theirLevel = abilityForReputation(seller.rep);
+  if (ca < theirLevel - 28) return { ok: false, reason: `${player.name} is well below their level.` };
+  const wageRoom = seller.finances.wageBudgetAnnual / 52 - weeklyWageBill(world, seller);
+  if (player.contract.wage > wageRoom + 1) {
+    return { ok: false, reason: `They cannot fit ${player.name}'s wages into their budget.` };
+  }
+  if (player.age >= 33 && ca < theirLevel + 6) {
+    return { ok: false, reason: `${player.name} is too old for them to take on.` };
+  }
+  return { ok: true };
 }
 
 /** What the player values a personal-terms package at, per week. */
@@ -298,6 +345,7 @@ export function transferOffer(game, neg, offer) {
       fee: Math.max(0, offer.fee || 0),
       sellOn: clamp(offer.sellOn || 0, 0, 30),
       instalments: clamp(Math.round(offer.instalments || 1), 1, 4),
+      swap: [...(offer.swap || [])],
       equivalent,
     };
     pushLog(neg, 'good', `${seller ? seller.name : 'They'} accept. Now agree personal terms with him.`);
@@ -460,6 +508,165 @@ export function termsOffer(game, neg, offer) {
     outcome: weekly >= neg.demandWage * 0.9 ? 'countered' : 'rejected',
     counter: want, negotiation: neg, reason: verdict.reason,
     text: `He is looking for nearer ${fmt(want)} a week.`,
+  };
+}
+
+// --- Loans -------------------------------------------------------------------
+//
+// Every slot a loan needs has existed since the first commit - `loanedFrom`,
+// `loanUntilYear` and `wageShare` are written by `completeTransfer`, and
+// `payWeeklyWages` has always split the bill on `wageShare` - and no code path
+// has ever created one. This is that path.
+//
+// A loan is not a send-down. Stage 5's reserve side keeps the player yours; a
+// loan hands him to a club you do not control, which is why it stays worth
+// doing even now that reserve football exists: it gets him a level of football
+// your own reserve side cannot offer.
+
+/** How much of the wage the borrower can be asked to cover. */
+export const LOAN_WAGE_SHARES = [0.25, 0.5, 0.75, 1];
+
+/**
+ * Whether a club would lend this player out at all.
+ *
+ * The test is the seller's, not the buyer's: a club does not lend its best
+ * player to a rival, and there is no point lending out someone who is already
+ * getting a game.
+ */
+export function willLend(world, seller, player, borrower) {
+  if (!player?.contract) return { ok: false, reason: 'He has no contract.' };
+  if (player.contract.loanedFrom) return { ok: false, reason: 'He is already out on loan.' };
+  const role = expectedRole(world, seller, player);
+  if (role === 'key') return { ok: false, reason: `${player.name} is too important to them.` };
+  // Role alone was not enough: a browser pass turned up a 156-ability
+  // twenty-one-year-old available on loan, because at a club stacked with
+  // internationals he read as a squad player rather than a key one. A club does
+  // not lend out someone at or above its own level whatever the team sheet says.
+  if (currentAbility(player) >= abilityForReputation(seller.rep)) {
+    return { ok: false, reason: `${player.name} is too good for them to let go, even for a season.` };
+  }
+  if (borrower && borrower.rep >= seller.rep + 6 && role === 'rotation') {
+    return { ok: false, reason: 'They will not strengthen a bigger rival.' };
+  }
+  return { ok: true, role };
+}
+
+/** Open loan talks. Same round structure as a transfer, different currency. */
+export function openLoanTalks(game, player, buyer) {
+  const world = game.world;
+  const seller = player.clubId ? world.clubs[player.clubId] : null;
+  if (!seller) return { error: 'A free agent cannot be loaned - sign him.' };
+  const gate = canOpenTalks(game, player, buyer.id);
+  if (!gate.ok) return { error: gate.reason };
+  if (gate.existing && gate.existing.status === 'open') return { negotiation: gate.existing };
+  const lend = willLend(world, seller, player, buyer);
+  if (!lend.ok) return { error: lend.reason };
+
+  const rng = new Rng(hashSeed(`loan:${game.seed}:${player.id}:${buyer.id}:${game.season}:${game.day}`));
+  // What they want covered. A club lending out a fringe player wants most of
+  // the wage off its books; one lending a good young player wants him played
+  // and will carry more of it.
+  const young = player.age <= 21 ? 0.18 : 0;
+  const wanted = clamp(rng.range(0.55, 0.95) - young, 0.2, 1);
+  const neg = {
+    id: `l${game.season}_${game.day}_${player.id}_${buyer.id}`,
+    kind: 'loan',
+    phase: 'loan',
+    playerId: player.id,
+    buyerId: buyer.id,
+    sellerId: seller.id,
+    round: 0,
+    status: 'open',
+    wantedShare: Math.round(wanted * 100) / 100,
+    wantedFee: Math.round(marketValue(world, player) * rng.range(0.01, 0.045) / 5000) * 5000,
+    patience: clamp(3 + rng.int(0, 1), 3, 4),
+    maxPatience: 4,
+    openedDay: game.day,
+    lastLoanValue: null,
+    agreed: null,
+    log: [],
+    rngState: rng.save(),
+  };
+  neg.maxPatience = neg.patience;
+  pushLog(neg, 'neutral', `${seller.name} will listen. They want ${Math.round(neg.wantedShare * 100)}% of his `
+    + `${fmt(player.contract.wage)} wage covered${neg.wantedFee > 0 ? `, and a ${fmt(neg.wantedFee)} loan fee` : ''}.`);
+
+  game.negotiations = game.negotiations || {};
+  game.negotiations[neg.id] = neg;
+  return { negotiation: neg };
+}
+
+/** What a loan package is worth to the lender, in pounds a week. */
+export function loanEquivalent(world, player, offer) {
+  const wage = player.contract?.wage || 0;
+  const share = clamp(offer.wageShare ?? 0, 0, 1);
+  // The fee is spread over the loan so it can be compared with the wage saving.
+  const weeks = Math.max(8, Math.round((offer.weeks ?? 38)));
+  return Math.round(wage * share + (Math.max(0, offer.fee || 0) / weeks));
+}
+
+/** Put a loan package to the lending club. */
+export function loanOffer(game, neg, offer) {
+  const world = game.world;
+  const player = world.players[neg.playerId];
+  const seller = world.clubs[neg.sellerId];
+  if (!player || !seller || neg.status !== 'open') return { outcome: 'closed', text: 'These talks are over.' };
+  if (player.clubId !== neg.sellerId) {
+    neg.status = 'collapsed';
+    neg.reopenDay = game.day;
+    return { outcome: 'collapsed', negotiation: neg, text: `${player.name} has already moved on.` };
+  }
+
+  neg.round++;
+  const rng = negRng(neg);
+  const value = loanEquivalent(world, player, offer);
+  const want = loanEquivalent(world, player, { wageShare: neg.wantedShare, fee: neg.wantedFee, weeks: offer.weeks });
+
+  const previous = neg.lastLoanValue;
+  neg.lastLoanValue = value;
+  // Same ordering as a transfer: a repeat is judged before acceptance, so a
+  // softened position cannot make an offer already on the table good.
+  if (previous !== null && value <= previous * 1.01) {
+    neg.patience -= 2;
+    neg.wantedShare = clamp(neg.wantedShare * 1.04, 0.2, 1);
+    pushLog(neg, 'bad', 'That is the same offer as last time.');
+    if (neg.patience <= 0) return collapseLoan(game, neg, seller, rng);
+    saveRng(neg, rng);
+    return { outcome: 'rejected', negotiation: neg, text: 'The same offer gets the same answer.' };
+  }
+
+  if (value >= want) {
+    neg.status = 'agreed';
+    neg.agreed = {
+      wageShare: clamp(offer.wageShare ?? 0, 0, 1),
+      fee: Math.max(0, offer.fee || 0),
+      weeks: Math.max(8, Math.round(offer.weeks ?? 38)),
+    };
+    pushLog(neg, 'good', `${seller.name} agree to the loan.`);
+    saveRng(neg, rng);
+    return { outcome: 'agreed', negotiation: neg, text: `${seller.name} will let him go on loan.` };
+  }
+
+  neg.patience -= 1;
+  if (value >= want * 0.9) neg.wantedShare = clamp(neg.wantedShare * rng.range(0.96, 0.99), 0.2, 1);
+  if (neg.patience <= 0) return collapseLoan(game, neg, seller, rng);
+  pushLog(neg, 'neutral', `Not enough. They want nearer ${Math.round(neg.wantedShare * 100)}% of his wage covered.`);
+  saveRng(neg, rng);
+  return {
+    outcome: value >= want * 0.9 ? 'countered' : 'rejected',
+    counterShare: neg.wantedShare, negotiation: neg,
+    text: `They want nearer ${Math.round(neg.wantedShare * 100)}% of the wage covered.`,
+  };
+}
+
+function collapseLoan(game, neg, seller, rng) {
+  neg.status = 'collapsed';
+  neg.reopenDay = game.day + COOLING_OFF_DAYS;
+  pushLog(neg, 'bad', 'They have ended the discussion.');
+  saveRng(neg, rng);
+  return {
+    outcome: 'collapsed', negotiation: neg,
+    text: `${seller.name} have ended talks. They will not listen again for ${COOLING_OFF_DAYS} days.`,
   };
 }
 

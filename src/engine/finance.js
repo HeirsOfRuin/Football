@@ -62,6 +62,14 @@ export function payWeeklyWages(game, club) {
     else if (club.affiliateOf && p.contract.wageReserve) total += p.contract.wageReserve;
     else total += p.contract.wage;
   }
+  // The half of a loaned-out player's wage the parent still carries. Without
+  // this a loan is not a wage split, it is a way of having someone else pay him
+  // in full - and the borrower's share was the only half anyone charged.
+  for (const id of club.loanedOut || []) {
+    const p = world.players[id];
+    if (!p?.contract) continue;
+    total += p.contract.wage * (1 - clamp(p.contract.wageShare ?? 0, 0, 1));
+  }
   // Staff wages scale with facilities and reputation.
   // A reserve side carries no separate staff bill: it shares the parent's.
   const staff = club.affiliateOf ? 0
@@ -84,13 +92,25 @@ export function weeklyWageBill(world, club) {
   // budget, and adding them separately would count the same wages twice.
   if (club.affiliateOf) return weeklyWageBill(world, bookkeeper(world, club));
   let total = 0;
+  // This has to agree with payWeeklyWages, line for line. The wage room shown
+  // on the transfers screen and the money actually taken out of the account
+  // being two separate derivations is how a club ends up in the red while its
+  // budget says it has room.
   for (const id of club.squad) {
     const p = world.players[id];
-    if (p?.contract) total += p.contract.wage;
+    if (!p?.contract) continue;
+    total += p.contract.loanedFrom && p.contract.wageShare != null
+      ? p.contract.wage * p.contract.wageShare
+      : p.contract.wage;
   }
   for (const id of club.youthSquad || []) {
     const p = world.players[id];
     if (p?.contract) total += p.contract.wage;
+  }
+  for (const id of club.loanedOut || []) {
+    const p = world.players[id];
+    if (!p?.contract) continue;
+    total += p.contract.wage * (1 - clamp(p.contract.wageShare ?? 0, 0, 1));
   }
   const reserve = club.reserveClubId ? world.clubs[club.reserveClubId] : null;
   if (reserve) {

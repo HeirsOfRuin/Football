@@ -4,7 +4,7 @@ import { clamp, remap, sortBy } from '../core/util.js';
 import { currentAbility, abilityForPosition, positionEffectiveness } from '../data/attributes.js';
 import { estimateValue, estimateWage } from '../gen/playergen.js';
 import { squadDepth, registrationLimit, refreshRegistration } from './lineup.js';
-import { weeklyWageBill } from './finance.js';
+import { weeklyWageBill, ledgerEntry } from './finance.js';
 import { abilityForReputation } from '../data/nations.js';
 import { expectedRole } from './training.js';
 
@@ -217,6 +217,69 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
   return true;
 }
 
+/**
+ * Send a player out on loan.
+ *
+ * Deliberately not `completeTransfer` with a flag: a loan leaves ownership
+ * where it is, and every one of the things a transfer does to the selling club -
+ * banking a fee, topping up the transfer budget, writing a line in the transfer
+ * log as a sale - would be wrong here.
+ */
+export function completeLoan(game, player, fromId, toId, terms) {
+  const world = game.world;
+  const from = world.clubs[fromId];
+  const to = world.clubs[toId];
+  if (!from || !to || !player.contract) return false;
+
+  from.squad = from.squad.filter((id) => id !== player.id);
+  from.loanedOut = [...(from.loanedOut || []), player.id];
+  to.squad.push(player.id);
+  player.clubId = to.id;
+  player.contract.loanedFrom = from.id;
+  player.contract.loanUntilYear = world.year + 1;
+  player.contract.loanUntilDay = terms.until ?? null;
+  player.contract.wageShare = clamp(terms.wageShare ?? 0.5, 0, 1);
+
+  const fee = Math.max(0, terms.fee || 0);
+  if (fee > 0) {
+    to.finances.balance -= fee;
+    to.finances.seasonSpend += fee;
+    ledgerEntry(to, game.day, `Loan fee: ${player.name}`, -fee, 'transfer');
+    from.finances.balance += fee;
+    from.finances.seasonIncome += fee;
+    ledgerEntry(from, game.day, `Loan fee: ${player.name}`, fee, 'transfer');
+  }
+
+  refreshRegistration(world, to);
+  refreshRegistration(world, from);
+  assignFreeNumber(world, to, player);
+  game.transferLog.push({
+    day: game.day, season: game.season, playerId: player.id, name: player.name,
+    from: from.short, to: to.short, fee, loan: true,
+  });
+  return true;
+}
+
+/** A loan ends: he goes back, on the contract he never stopped being on. */
+export function returnFromLoan(game, player) {
+  const world = game.world;
+  const parent = player.contract?.loanedFrom ? world.clubs[player.contract.loanedFrom] : null;
+  const borrower = player.clubId ? world.clubs[player.clubId] : null;
+  if (!parent) return false;
+  if (borrower) borrower.squad = borrower.squad.filter((id) => id !== player.id);
+  parent.loanedOut = (parent.loanedOut || []).filter((id) => id !== player.id);
+  if (!parent.squad.includes(player.id)) parent.squad.push(player.id);
+  player.clubId = parent.id;
+  player.contract.loanedFrom = null;
+  player.contract.loanUntilYear = null;
+  player.contract.loanUntilDay = null;
+  player.contract.wageShare = null;
+  refreshRegistration(world, parent);
+  if (borrower) refreshRegistration(world, borrower);
+  assignFreeNumber(world, parent, player);
+  return true;
+}
+
 function assignFreeNumber(world, club, player) {
   const taken = new Set(club.squad.map((id) => world.players[id]?.squadNumber).filter(Boolean));
   for (let n = 1; n <= 60; n++) {
@@ -409,6 +472,45 @@ export function aiTransferAttempt(game, club, rng) {
   if (!agree.accepted) return null;
   completeTransfer(game, player, null, club.id, 0, contractOffer);
   return { player, fee: 0, from: null, to: club };
+}
+
+/**
+ * A club sends a young player out for a season's football.
+ *
+ * Without this, loans exist only for the user, and a mechanic that only one
+ * club in the world uses is not part of the world. The test is the real one:
+ * a promising player who is not getting a game, lent to a smaller club that
+ * needs the position.
+ */
+export function aiLoanAttempt(game, club, rng) {
+  const world = game.world;
+  const candidates = club.squad.map((id) => world.players[id]).filter((p) => {
+    if (!p?.contract || p.contract.loanedFrom) return false;
+    if (p.age > 23 || p.age < 17) return false;
+    // Worth developing, and not currently developing here.
+    if (p.pa - currentAbility(p) < 12) return false;
+    return expectedRole(world, club, p) === 'fringe';
+  });
+  if (!candidates.length) return null;
+  const player = rng.pick(candidates);
+
+  // Somewhere smaller, that needs this position, and can carry a share.
+  const suitors = Object.values(world.clubs).filter((c) => {
+    if (c.id === club.id || c.affiliateOf || c.isUserClub) return false;
+    if (c.rep >= club.rep - 4) return false;
+    if (c.squad.length >= registrationLimit(c)) return false;
+    return currentAbility(player) > abilityForReputation(c.rep) - 10;
+  });
+  if (!suitors.length) return null;
+  const to = rng.weighted(suitors.slice(0, 40), (c) => Math.max(1, c.rep));
+  const need = identifyNeed(world, to).slice(0, 4);
+  if (!need.some((n) => positionEffectiveness(player, n.pos) > 0.88)) return null;
+
+  const share = rng.pick([0.25, 0.5, 0.75]);
+  const room = to.finances.wageBudgetAnnual / 52 - weeklyWageBill(world, to);
+  if (player.contract.wage * share > room) return null;
+  if (!completeLoan(game, player, club.id, to.id, { wageShare: share, fee: 0 })) return null;
+  return { player, from: club, to, share };
 }
 
 /** AI clubs offload players they do not need. */

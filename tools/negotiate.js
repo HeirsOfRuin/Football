@@ -16,10 +16,14 @@
 import { generateWorld } from '../src/gen/worldgen.js';
 import { newGame } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
-import { askingPrice, marketValue, evaluateContract, contractDemand } from '../src/engine/transfers.js';
+import {
+  askingPrice, marketValue, evaluateContract, contractDemand, completeLoan, returnFromLoan,
+} from '../src/engine/transfers.js';
+import { weeklyWageBill, payWeeklyWages } from '../src/engine/finance.js';
+import { advanceDay } from '../src/state/game.js';
 import {
   openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
-  COOLING_OFF_DAYS,
+  COOLING_OFF_DAYS, openLoanTalks, loanOffer, willLend, willTakeInSwap,
 } from '../src/engine/negotiation.js';
 import { currentAbility } from '../src/data/attributes.js';
 
@@ -256,6 +260,128 @@ console.log(`\n${TRIALS} negotiations per arm.\n`);
   const later = openTransferTalks(game, p, buyer);
   line(`talks can be reopened after ${COOLING_OFF_DAYS} days`, !!later.negotiation && !later.error,
     later.error || 'reopened');
+}
+
+// --- 8. Loans -----------------------------------------------------------------
+// Every slot a loan needs has existed since the first commit and nothing has
+// ever created one. So the checks are about the money moving, not about a
+// function returning true.
+{
+  const { game, buyer } = fresh(7272);
+  const world = game.world;
+  // Someone else's fringe young player, whom a club would actually lend.
+  let lent = null;
+  for (const club of Object.values(world.clubs)) {
+    if (club.id === buyer.id || club.affiliateOf) continue;
+    for (const id of club.squad) {
+      const p = world.players[id];
+      if (!p?.contract || p.age > 22) continue;
+      if (willLend(world, club, p, buyer).ok) { lent = { p, club }; break; }
+    }
+    if (lent) break;
+  }
+  line('a club will lend somebody', !!lent, lent ? `${lent.p.name} at ${lent.club.short}` : 'nobody lendable');
+
+  if (lent) {
+    const { negotiation } = openLoanTalks(game, lent.p, buyer);
+    let done = null;
+    for (let i = 0; i < 8 && negotiation.status === 'open'; i++) {
+      // Meet whatever they ask for, climbing one step at a time.
+      const share = Math.min(1, (negotiation.wantedShare || 0.5) + 0.02);
+      const r = loanOffer(game, negotiation, { wageShare: share, fee: negotiation.wantedFee, weeks: 38 });
+      if (r.outcome === 'agreed') { done = negotiation.agreed; break; }
+    }
+    line('a loan can be agreed', !!done, done ? `${Math.round(done.wageShare * 100)}% of the wage covered` : 'never agreed');
+
+    if (done) {
+      const parentBefore = weeklyWageBill(world, lent.club);
+      completeLoan(game, lent.p, lent.club.id, buyer.id, done);
+      line('the loan actually moves him', lent.p.clubId === buyer.id
+        && buyer.squad.includes(lent.p.id) && !lent.club.squad.includes(lent.p.id));
+      line('the parent still knows he is theirs', lent.p.contract.loanedFrom === lent.club.id
+        && lent.club.loanedOut.includes(lent.p.id));
+
+      // The wage split is the point of a loan. Both halves have to be charged,
+      // and the two clubs' bills have to add up to exactly his wage.
+      const borrowerShare = weeklyWageBill(world, buyer);
+      const parentAfter = weeklyWageBill(world, lent.club);
+      const paidByParent = parentAfter - (parentBefore - lent.p.contract.wage);
+      const wage = lent.p.contract.wage;
+      line('the two clubs between them pay his whole wage',
+        Math.abs(paidByParent + wage * done.wageShare - wage) < 2,
+        `parent ${Math.round(paidByParent)} + borrower ${Math.round(wage * done.wageShare)} = ${wage}`);
+
+      // And the displayed bill has to match the money actually taken out. The
+      // staff bill is computed here rather than allowed for by a tolerance: a
+      // tolerance wide enough to swallow it is wide enough to swallow the loan
+      // share too, which is the thing being checked.
+      // weeklyWageBill answers a budget question - what does this club carry in
+      // total, its reserve side included - while payWeeklyWages charges one club
+      // at a time, so the reserve side's own call has to be counted too. Adding
+      // them up is the invariant; comparing one to the other is not, and the
+      // first version of this check failed on exactly that.
+      const f = buyer.facilities;
+      const staff = (buyer.rep * 900) + (f.training + f.youth + f.scouting + f.medical) * 700;
+      const reserveSide = buyer.reserveClubId ? world.clubs[buyer.reserveClubId] : null;
+      const ledgerBefore = buyer.finances.balance;
+      payWeeklyWages(game, buyer);
+      if (reserveSide) payWeeklyWages(game, reserveSide);
+      const charged = ledgerBefore - buyer.finances.balance;
+      line('the wage bill shown is the wage bill charged',
+        Math.abs(charged - (borrowerShare + staff)) < 2,
+        `charged ${Math.round(charged)} against ${Math.round(borrowerShare)} of wages plus ${Math.round(staff)} of staff`);
+
+      // He goes home at the end of the season.
+      returnFromLoan(game, lent.p);
+      line('he goes back when the loan ends', lent.p.clubId === lent.club.id
+        && !lent.p.contract.loanedFrom && lent.club.loanedOut.length === 0
+        && !buyer.squad.includes(lent.p.id));
+    }
+  }
+
+  // The AI has to use loans too, or the mechanic exists for one club in the world.
+  const g2 = newGame({ seed: 1717, size: 'small', managerName: 'P', clubId: null });
+  let guard = 0;
+  while (g2.day < 120 && guard++ < 140) advanceDay(g2);
+  const loans = g2.transferLog.filter((t) => t.loan).length;
+  line('AI clubs send players out on loan', loans > 0, `${loans} in the first 120 days`);
+}
+
+// --- 9. Swaps ------------------------------------------------------------------
+{
+  const { game, buyer } = fresh(8484);
+  const world = game.world;
+  const { p: mark, ask } = targets(game, buyer, 1)[0];
+  const seller = world.clubs[mark.clubId];
+  const offerable = buyer.squad.map((id) => world.players[id])
+    .filter((p) => p && willTakeInSwap(world, seller, p).ok);
+  line('there is somebody they would take in part-exchange', offerable.length > 0,
+    `${offerable.length} of ${buyer.squad.length}`);
+
+  if (offerable.length) {
+    const swap = [offerable[0].id];
+    const cheapest = (o) => {
+      let lo = 0; let hi = ask * 2.4;
+      for (let i = 0; i < 20; i++) {
+        const mid = (lo + hi) / 2;
+        const g2 = { ...game, negotiations: {} };
+        const { negotiation } = openTransferTalks(g2, mark, buyer);
+        if (transferOffer(g2, negotiation, { fee: mid, ...o }).outcome === 'accepted') hi = mid; else lo = mid;
+      }
+      return hi;
+    };
+    const plain = cheapest({ sellOn: 0, instalments: 1 });
+    const traded = cheapest({ sellOn: 0, instalments: 1, swap });
+    const saving = plain - traded;
+    const value = marketValue(world, offerable[0]);
+    line('offering a player lowers the cash needed', traded < plain * 0.98,
+      `${fmt(plain)} -> ${fmt(traded)}`);
+    // ...but not at full price, or part-exchange is a way to buy at a discount.
+    line('he is taken below his market value', saving < value * 0.95,
+      `saved ${fmt(saving)} on a player worth ${fmt(value)} (${Math.round(saving / value * 100)}%)`);
+    line('a club refuses a player who is beneath it or out of its wage range',
+      offerable.length < buyer.squad.length, `${buyer.squad.length - offerable.length} refused`);
+  }
 }
 
 // --- Summary -----------------------------------------------------------------

@@ -113,13 +113,29 @@ export function ratingCell(avg) {
 export function ageOf(p) { return p.age; }
 
 /** One row of a squad table. */
+/**
+ * What this club actually pays him each week.
+ *
+ * A borrowed player on a split wage was showing his full wage in every squad
+ * list, which is a different number from the one that leaves the account. The
+ * column has to mean the same thing as the ledger.
+ */
+export function wagePaidHere(p) {
+  if (!p.contract) return 0;
+  if (p.contract.loanedFrom && p.contract.wageShare != null) {
+    return Math.round(p.contract.wage * p.contract.wageShare);
+  }
+  return p.contract.wage;
+}
+
 export function playerRow(world, p, opts = {}) {
   const ca = currentAbility(p);
   const avg = p.season.ratingCount ? p.season.ratingSum / p.season.ratingCount : 0;
   const club = p.clubId ? world.clubs[p.clubId] : null;
   return `<tr class="clickable" data-player="${esc(p.id)}">
     <td class="num faint">${p.squadNumber ?? ''}</td>
-    <td class="nowrap">${esc(p.name)}${p.custom ? ' <span class="pill info" title="Created in your player library">C</span>' : ''}</td>
+    <td class="nowrap">${esc(p.name)}${p.custom ? ' <span class="pill info" title="Created in your player library">C</span>' : ''}${
+  p.contract?.loanedFrom ? ` <span class="pill warn" title="On loan from ${esc(world.clubs[p.contract.loanedFrom]?.name || 'another club')}">Loan</span>` : ''}</td>
     <td>${posPill(p)}</td>
     <td class="num">${p.age}</td>
     <td class="nowrap faint small">${esc(nationName(world, p.nat))}</td>
@@ -131,7 +147,7 @@ export function playerRow(world, p, opts = {}) {
     <td class="num">${p.season.assists}</td>
     <td class="num">${ratingCell(avg)}</td>
     <td class="num">${money(marketValue(world, p))}</td>
-    <td class="num">${p.contract ? money(p.contract.wage) : '—'}</td>
+    <td class="num">${p.contract ? money(wagePaidHere(p)) : '—'}</td>
     <td>${stars(ca)}</td>
   </tr>`;
 }
@@ -167,7 +183,8 @@ export function sortValue(p, key, world) {
     case 'assists': return p.season.assists;
     case 'rating': return p.season.ratingCount ? p.season.ratingSum / p.season.ratingCount : 0;
     case 'value': return marketValue(world, p);
-    case 'wage': return p.contract?.wage ?? 0;
+    // Sorted on what this club pays, to match the column it sorts.
+    case 'wage': return wagePaidHere(p);
     case 'ability': return currentAbility(p);
     case 'club': return p.clubId ? (world.clubs[p.clubId]?.name ?? '') : 'zzz';
     default: return 0;

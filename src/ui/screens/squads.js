@@ -176,12 +176,45 @@ function firstTeamView(app, world, club, reserve) {
       <td class="small faint">${esc(p.positions.join('/'))}</td>
       <td class="num">${currentAbility(p)}</td>
       <td class="small faint">${esc(ROLE_LABELS[expectedRole(world, club, p)])}</td>
-      <td class="small ${isReg ? 'good' : 'bad'}">${isReg ? 'Registered' : 'Not registered'}</td>
+      <td class="small ${isReg ? 'good' : 'bad'}">${isReg ? 'Registered' : 'Not registered'}${
+  p.contract?.loanedFrom ? ` <span class="pill warn">On loan</span>` : ''}</td>
       <td class="right nowrap">
         <button class="ghost small" data-reg="${esc(p.id)}">${isReg ? 'Deregister' : 'Register'}</button>
-        ${reserve ? `<button class="ghost small" data-send="${esc(p.id)}">To reserves</button>` : ''}
+        ${reserve && !p.contract?.loanedFrom ? `<button class="ghost small" data-send="${esc(p.id)}">To reserves</button>` : ''}
       </td></tr>`;
-  }).join('')}</tbody></table></div>`)}`;
+  }).join('')}</tbody></table></div>`)}
+
+  ${loanedOutPanel(world, club)}`;
+}
+
+/**
+ * Players who are away on loan.
+ *
+ * Without this they simply vanish from every list the manager has - the squad
+ * screen, the team sheet, the wage bill - while the club is still paying part
+ * of their wages and still owns them. An absent thing and a lost thing look
+ * identical.
+ */
+function loanedOutPanel(world, club) {
+  const out = (club.loanedOut || []).map((id) => world.players[id]).filter(Boolean);
+  if (!out.length) return '';
+  return panelTight(`Out on loan (${out.length})`, `<div class="table-wrap"><table>
+    <thead><tr><th>Player</th><th class="num">Age</th><th>Pos</th><th class="num">Ability</th>
+      <th>At</th><th class="num">You still pay</th><th class="num">Games there</th></tr></thead>
+    <tbody>${out.map((p) => {
+    const at = p.clubId ? world.clubs[p.clubId] : null;
+    const share = 1 - (p.contract?.wageShare ?? 0);
+    return `<tr class="clickable" data-player="${esc(p.id)}">
+      <td class="nowrap">${esc(p.name)}</td>
+      <td class="num">${p.age}</td>
+      <td class="small faint">${esc(p.positions.join('/'))}</td>
+      <td class="num">${currentAbility(p)}</td>
+      <td class="small">${at ? esc(at.short) : '—'}</td>
+      <td class="num">${money(Math.round((p.contract?.wage || 0) * share))}/wk</td>
+      <td class="num">${p.season.apps + p.season.subApps}</td>
+    </tr>`;
+  }).join('')}</tbody></table>
+  <p class="small faint" style="margin:8px 0 0">They come back at the end of the season, on your full wage.</p></div>`);
 }
 
 function reservesView(app, world, club, reserve) {

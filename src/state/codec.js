@@ -293,6 +293,14 @@ export function migrateSave(data) {
   if (version < 7 && data.game && !data.game.negotiations) {
     data.game.negotiations = {};
   }
+  // Loans exist now, so every club needs somewhere to record who it has lent
+  // out - the parent's half of a split wage is charged off that list.
+  if (version < 7 && data.world?.clubs) {
+    for (const id in data.world.clubs) {
+      const club = data.world.clubs[id];
+      club.loanedOut = club.loanedOut || [];
+    }
+  }
   if (version < 6) {
     const leagues = data.world?.leagues || [];
     for (const id in data.world?.clubs || {}) {

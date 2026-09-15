@@ -32,10 +32,13 @@ import { leagueObjective, cupObjective, remitObjective, objectiveScore, seasonOb
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 import {
   openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
+  openLoanTalks, loanOffer, willLend, willTakeInSwap, SWAP_DISCOUNT,
 } from '../src/engine/negotiation.js';
 import {
   askingPrice, evaluateContract, contractDemand, completeTransfer,
+  completeLoan, returnFromLoan, marketValue,
 } from '../src/engine/transfers.js';
+import { weeklyWageBill } from '../src/engine/finance.js';
 
 let passed = 0;
 let failed = 0;
@@ -768,6 +771,97 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     back7 ? 'kept' : 'lost');
 }
 
+// --- Loans and part-exchange -------------------------------------------------
+{
+  const g8 = newGame({ seed: 7272, size: 'small', managerName: 'Test', clubId: null });
+  const w8 = g8.world;
+  const t8 = w8.leagues.find((l) => l.tier === 1);
+  const borrower = w8.clubs[t8.clubIds[3]];
+  borrower.isUserClub = true;
+  g8.userClubId = borrower.id;
+
+  let lent = null;
+  for (const club of Object.values(w8.clubs)) {
+    if (club.id === borrower.id || club.affiliateOf) continue;
+    for (const id of club.squad) {
+      const p = w8.players[id];
+      if (p?.contract && p.age <= 22 && willLend(w8, club, p, borrower).ok) { lent = { p, club }; break; }
+    }
+    if (lent) break;
+  }
+  check('some club will lend a player', !!lent);
+  if (lent) {
+    const { negotiation } = openLoanTalks(g8, lent.p, borrower);
+    check('loan talks open with a position', !!negotiation && negotiation.wantedShare > 0);
+    let deal = null;
+    for (let i = 0; i < 8 && negotiation.status === 'open'; i++) {
+      const r = loanOffer(g8, negotiation, {
+        wageShare: Math.min(1, negotiation.wantedShare + 0.02), fee: negotiation.wantedFee, weeks: 38,
+      });
+      if (r.outcome === 'agreed') { deal = negotiation.agreed; break; }
+    }
+    check('a loan can be agreed', !!deal, deal ? `${Math.round(deal.wageShare * 100)}% covered` : 'no');
+
+    if (deal) {
+      const wage = lent.p.contract.wage;
+      const parentBefore = weeklyWageBill(w8, lent.club);
+      completeLoan(g8, lent.p, lent.club.id, borrower.id, deal);
+      check('the loan moves him and leaves ownership behind',
+        lent.p.clubId === borrower.id && lent.p.contract.loanedFrom === lent.club.id
+        && lent.club.loanedOut.includes(lent.p.id) && !lent.club.squad.includes(lent.p.id));
+      // The split is the whole mechanic. Nothing charged the parent's half
+      // before this: payWeeklyWages only ever saw the borrower's share.
+      const paidByParent = weeklyWageBill(w8, lent.club) - (parentBefore - wage);
+      check('both clubs together pay exactly his wage',
+        Math.abs(paidByParent + wage * deal.wageShare - wage) < 2,
+        `${Math.round(paidByParent)} + ${Math.round(wage * deal.wageShare)} v ${wage}`);
+      record('loan wage split, parent to borrower',
+        `${Math.round((1 - deal.wageShare) * 100)}% / ${Math.round(deal.wageShare * 100)}%`);
+      const parentXI = buildXI(w8, lent.club, lent.club.tactic);
+      const parentPicked = [
+        ...parentXI.starters.filter((sl) => sl.player).map((sl) => sl.player.id),
+        ...parentXI.bench.map((p) => p.id),
+      ];
+      check('a loaned player cannot be picked for his parent',
+        !parentPicked.includes(lent.p.id), `${parentPicked.length} picked`);
+      returnFromLoan(g8, lent.p);
+      check('the loan ends and he goes home',
+        lent.p.clubId === lent.club.id && !lent.p.contract.loanedFrom
+        && lent.club.loanedOut.length === 0 && !borrower.squad.includes(lent.p.id));
+    }
+  }
+
+  // Part-exchange: worth something, but never full price, or it is a way to buy
+  // at a discount rather than a way to move a player on.
+  const seller8 = w8.clubs[t8.clubIds[6]];
+  const spare = borrower.squad.map((id) => w8.players[id])
+    .filter((p) => p && willTakeInSwap(w8, seller8, p).ok);
+  check('a club would take somebody in part-exchange', spare.length > 0, `${spare.length}`);
+  check('and refuses others', spare.length < borrower.squad.length);
+  if (spare.length) {
+    const target8 = w8.players[seller8.squad[4]];
+    const plain = cashEquivalent(w8, target8, { fee: 20e6 });
+    const traded = cashEquivalent(w8, target8, { fee: 20e6, swap: [spare[0].id] });
+    check('part-exchange adds to what the seller sees', traded > plain);
+    check('a swapped player is taken below his value',
+      traded - plain < marketValue(w8, spare[0]),
+      `${traded - plain} against a value of ${marketValue(w8, spare[0])}`);
+    check('the swap discount is the one the screen advertises',
+      Math.abs((traded - plain) - Math.round(marketValue(w8, spare[0]) * SWAP_DISCOUNT)) <= 1);
+  }
+
+  // The AI has to use loans, or the mechanic exists for exactly one club.
+  const g9 = newGame({ seed: 1717, size: 'small', managerName: 'Test', clubId: null });
+  let guard9 = 0;
+  while (g9.day < 120 && guard9++ < 140) advanceDay(g9);
+  const aiLoans = g9.transferLog.filter((t) => t.loan).length;
+  check('AI clubs loan players out', aiLoans > 0, `${aiLoans} in 120 days`);
+  record('loans in the first 120 days', aiLoans);
+  const stranded = Object.values(g9.world.clubs).filter((c) => (c.loanedOut || [])
+    .some((id) => !g9.world.players[id] || g9.world.players[id].contract?.loanedFrom !== c.id));
+  check('no club has a stale loan record', stranded.length === 0, `${stranded.length} clubs`);
+}
+
 // --- Squads below the first team ---------------------------------------------
 {
   const w2 = generateWorld({ seed: 5150, size: 'small' });
@@ -948,7 +1042,10 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     `median squad strength ${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)} (${(drift * 100).toFixed(1)}%)`);
   check('the top flight does not inflate either', drift < 0.1,
     `median squad strength ${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)}`);
-  record('top-flight drift over 3 seasons', `${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)} (${(drift * 100).toFixed(1)}%)`);
+  // One seed, so read the sign and not the size: measured across three seeds
+  // this sits at +0.7%, -0.7% and 0.0%, and a single draw swings several points
+  // either way. The +/-10% bound above is the guard; this line is for eyeballing.
+  record('top-flight drift over 3 seasons (one seed)', `${startStrength.toFixed(0)} -> ${endStrength.toFixed(0)} (${(drift * 100).toFixed(1)}%)`);
   const ages = Object.values(g.world.clubs).flatMap((c) => c.squad.map((id) => g.world.players[id].age));
   const meanAge = ages.reduce((a, b) => a + b, 0) / ages.length;
   check('squads keep a sensible age profile', meanAge > 21 && meanAge < 28, `mean age ${meanAge.toFixed(1)}`);

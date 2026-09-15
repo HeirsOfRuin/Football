@@ -242,6 +242,7 @@ export function makeReserveSide(world, rng, parent, host, nation, year) {
     stadium: { name: `${parent.stadium.name} (Training Ground)`, capacity: 1200 },
     squad: [],
     youthSquad: [],
+    loanedOut: [],
     registration: [],
     tactic: defaultTactic('4-4-2'),
     manager: generateManager(rng, parent.nation, rep),
@@ -436,6 +437,7 @@ export function generateWorld(opts = {}) {
           // registration limit, and a full first team no longer silently
           // forfeits the year's intake.
           youthSquad: [],
+          loanedOut: [],
           // Ordered list of who may actually be selected. One source of truth;
           // the Set beside it is a cache, built on demand and never persisted.
           registration: [],

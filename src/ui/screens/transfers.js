@@ -8,7 +8,7 @@ import { weeklyWageBill } from '../../engine/finance.js';
 import { transferWindowOpen } from '../../core/calendar.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
-import { showBidDialog, showOfferDialog } from '../negotiate.js';
+import { showBidDialog, showOfferDialog, showLoanDialog } from '../negotiate.js';
 
 const VIEWS = [
   { id: 'search', label: 'Search' },
@@ -88,6 +88,12 @@ export function render(app) {
         b.onclick = (e) => {
           e.stopPropagation();
           showBidDialog(app, world.players[b.dataset.bid]);
+        };
+      });
+      root.querySelectorAll('[data-loan]').forEach((b) => {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          showLoanDialog(app, world.players[b.dataset.loan]);
         };
       });
       root.querySelectorAll('[data-offer]').forEach((b) => {
@@ -174,7 +180,8 @@ function searchView(app, club, state) {
           <td class="num faint">${p.pa}</td>
           <td class="num">${p.contract ? money(p.contract.wage) : '—'}</td>
           <td class="num">${c ? money(fee) : 'Free'}</td>
-          <td><button class="sm primary" data-bid="${esc(p.id)}">Bid</button></td>
+          <td class="nowrap"><button class="sm primary" data-bid="${esc(p.id)}">Bid</button>${c
+      ? `<button class="sm" data-loan="${esc(p.id)}">Loan</button>` : ''}</td>
         </tr>`;
     }).join('')}</tbody></table></div>`)}`;
 }
@@ -196,7 +203,8 @@ function shortlistView(app, club, state) {
         <td class="num">${currentAbility(p)}</td>
         <td class="num">${c ? money(askingPrice(world, p)) : 'Free'}</td>
         <td class="num">${money(contractDemand(world, p, club).wage)}</td>
-        <td class="nowrap"><button class="sm primary" data-bid="${esc(p.id)}">Bid</button>
+        <td class="nowrap"><button class="sm primary" data-bid="${esc(p.id)}">Bid</button>${c
+    ? `<button class="sm" data-loan="${esc(p.id)}">Loan</button>` : ''}
           <button class="sm" data-unshort="${esc(p.id)}">Remove</button></td>
       </tr>`;
   }).join('')}</tbody></table></div>`);

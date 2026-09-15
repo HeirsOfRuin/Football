@@ -10,11 +10,12 @@ import { esc, openModal, money, toast, kv, raw, bar } from './components.js';
 import { currentAbility } from '../data/attributes.js';
 import {
   marketValue, askingPrice, evaluateContract, contractDemand,
-  completeTransfer, renewContract,
+  completeTransfer, renewContract, completeLoan,
 } from '../engine/transfers.js';
 import {
   openTransferTalks, transferOffer, termsOffer, abandonTalks,
-  cashEquivalent, termsEquivalent, canOpenTalks,
+  cashEquivalent, termsEquivalent, canOpenTalks, willTakeInSwap, swapValue,
+  SWAP_DISCOUNT, openLoanTalks, loanOffer, loanEquivalent, LOAN_WAGE_SHARES,
 } from '../engine/negotiation.js';
 import { weeklyWageBill } from '../engine/finance.js';
 import { transferWindowOpen } from '../core/calendar.js';
@@ -128,7 +129,7 @@ function renderNegotiation(app, neg) {
 
       ${logHtml(neg)}
 
-      ${feePhase ? feeControls(neg, startFee) : termsControls(neg, player, last)}
+      ${feePhase ? feeControls(world, neg, startFee, club) : termsControls(neg, player, last)}
 
       <div id="neg-read" class="small faint" style="margin-top:8px"></div>
       <div id="neg-feedback" class="small" style="margin-top:6px"></div>`,
@@ -149,6 +150,7 @@ function renderNegotiation(app, neg) {
             fee: num('#neg-fee'),
             sellOn: num('#neg-sellon'),
             instalments: Number(modal.querySelector('#neg-instalments')?.value || 1),
+            swap: [...modal.querySelectorAll('.neg-swap:checked')].map((el) => el.value),
           };
         }
         return {
@@ -167,8 +169,9 @@ function renderNegotiation(app, neg) {
         neg.draft = offer;
         if (feePhase) {
           const eq = cashEquivalent(world, player, offer);
-          read.innerHTML = `They will read that as <b class="mono">${money(eq)}</b> in hand`
-            + `${offer.sellOn ? `, with the sell-on worth ${money(eq - Math.round(offer.fee * (1 - 0.045 * (offer.instalments - 1))))} of it` : ''}.`;
+          const swap = swapValue(world, offer.swap);
+          read.innerHTML = `They will read that as <b class="mono">${money(eq)}</b>`
+            + `${swap ? `, of which ${money(swap)} is the ${offer.swap.length} player${offer.swap.length === 1 ? '' : 's'} you are offering` : ' in hand'}.`;
         } else {
           const eq = termsEquivalent(player, offer);
           read.innerHTML = `He will read the package as <b class="mono">${money(eq)}</b> a week.`;
@@ -216,8 +219,18 @@ function renderNegotiation(app, neg) {
   });
 }
 
-function feeControls(neg, startFee) {
+function feeControls(world, neg, startFee, club) {
   const max = Math.max(neg.openingAsk * 2, 1000000);
+  const seller = world.clubs[neg.sellerId];
+  const chosen = new Set(neg.draft?.swap || []);
+  // Only players they would actually take. Listing the whole squad and then
+  // refusing most of it at the point of offer is the kind of screen that reads
+  // as broken; the reasons are shown instead.
+  const offerable = club.squad.map((id) => world.players[id]).filter(Boolean)
+    .map((p) => ({ p, verdict: willTakeInSwap(world, seller, p) }))
+    .sort((a, b) => Number(b.verdict.ok) - Number(a.verdict.ok) || marketValue(world, b.p) - marketValue(world, a.p))
+    .slice(0, 14);
+
   return `
     <div class="field" style="margin-top:12px"><label>Transfer fee</label>
       <input type="number" id="neg-fee" value="${Math.round(startFee)}" step="50000" min="0">
@@ -229,6 +242,18 @@ function feeControls(neg, startFee) {
       <div class="field"><label>Paid over</label>
         <select id="neg-instalments">${[1, 2, 3, 4].map((v) => `<option value="${v}" ${v === (neg.draft?.instalments ?? 1) ? 'selected' : ''}>${v} year${v > 1 ? 's' : ''}</option>`).join('')}</select></div>
     </div>
+    <details class="field" ${chosen.size ? 'open' : ''}><summary class="small">Offer players in part-exchange${chosen.size ? ` (${chosen.size})` : ''}</summary>
+      <div class="scroll-y" style="max-height:170px;margin-top:8px"><table><tbody>${offerable.map(({ p, verdict }) => `<tr>
+        <td style="width:24px"><input type="checkbox" class="neg-swap" value="${esc(p.id)}"
+          ${chosen.has(p.id) ? 'checked' : ''} ${verdict.ok ? '' : 'disabled'}></td>
+        <td class="small">${esc(p.name)} <span class="faint">${esc(p.positions.join('/'))}, ${p.age}</span>
+          ${verdict.ok ? '' : `<div class="small faint">${esc(verdict.reason)}</div>`}</td>
+        <td class="small num">${money(marketValue(world, p))}</td>
+        <td class="small num ${verdict.ok ? 'good' : 'faint'}">${verdict.ok ? money(Math.round(marketValue(world, p) * SWAP_DISCOUNT)) : '—'}</td>
+      </tr>`).join('')}</tbody></table></div>
+      <p class="small faint" style="margin:6px 0 0">They take a player in part-exchange at
+        ${Math.round(SWAP_DISCOUNT * 100)}% of his value — they did not ask for him, and they pick up his wages.</p>
+    </details>
     <p class="small faint" style="margin-bottom:0">A sell-on clause buys a lower fee because they share in the next sale.
       Instalments keep cash in your pocket, but they want the money now, so the total goes up.</p>`;
 }
@@ -274,6 +299,8 @@ function showCompletion(app, neg) {
     ['Fee', fee > 0 ? money(fee) : 'Free transfer'],
     ['Sell-on', neg.agreed?.sellOn ? `${neg.agreed.sellOn}%` : 'None'],
     ['Paid over', neg.agreed?.instalments > 1 ? `${neg.agreed.instalments} years` : 'In full'],
+    ['In part-exchange', (neg.agreed?.swap || []).length
+      ? neg.agreed.swap.map((id) => world.players[id]?.name).filter(Boolean).join(', ') : 'Nobody'],
     ['Wage', `${money(t.wage)}/week for ${t.years} year${t.years > 1 ? 's' : ''}`],
     ['Signing-on fee', t.signingBonus ? money(t.signingBonus) : 'None'],
     ['Release clause', t.releaseClause ? money(t.releaseClause) : 'None'],
@@ -283,6 +310,17 @@ function showCompletion(app, neg) {
     footer: '<button data-close>Not yet</button><button class="primary" data-act="sign">Sign him</button>',
     onMount(modal, close) {
       modal.querySelector('[data-act="sign"]').onclick = () => {
+        // The part-exchange leg goes first. If it went second, the squad-size
+        // and registration refresh would run against a squad that had already
+        // taken the new man in, and one of the two clubs would be counted wrong.
+        for (const id of neg.agreed?.swap || []) {
+          const out = world.players[id];
+          if (!out || !seller) continue;
+          const d = contractDemand(world, out, seller);
+          completeTransfer(game, out, club.id, seller.id, 0, {
+            wage: Math.max(out.contract?.wage || 0, d.wage), years: d.years, promisedRole: 'rotation',
+          });
+        }
         completeTransfer(game, player, player.clubId, club.id, fee, {
           wage: t.wage, years: t.years, promisedRole: t.promisedRole,
           releaseClause: t.releaseClause,
@@ -303,6 +341,146 @@ function showCompletion(app, neg) {
         close();
         app.refresh();
         toast(`${player.name} signs for ${club.name}.`);
+      };
+    },
+  });
+}
+
+/**
+ * Loan talks.
+ *
+ * Kept apart from the transfer window on purpose: the currency is different -
+ * you are arguing about how much of a wage you will cover, not a fee - and
+ * folding it into the same form would mean a screen where half the controls are
+ * always irrelevant.
+ */
+export function showLoanDialog(app, player) {
+  const game = app.game;
+  const world = game.world;
+  const club = world.clubs[game.userClubId];
+  if (!club) return;
+  if (!transferWindowOpen(game.day)) {
+    toast('The transfer window is closed.', 'warn');
+    return;
+  }
+  const opened = openLoanTalks(game, player, club);
+  if (opened.error) {
+    toast(opened.error, 'warn');
+    return;
+  }
+  renderLoan(app, opened.negotiation);
+}
+
+function renderLoan(app, neg) {
+  const game = app.game;
+  const world = game.world;
+  const club = world.clubs[neg.buyerId];
+  const player = world.players[neg.playerId];
+  const seller = world.clubs[neg.sellerId];
+  const wageRoom = club.finances.wageBudgetAnnual / 52 - weeklyWageBill(world, club);
+
+  if (neg.status === 'agreed' && neg.agreed) {
+    const t = neg.agreed;
+    openModal({
+      title: `Loan ${player.name}`,
+      narrow: true,
+      body: `${kv([
+    ['From', seller.name],
+    ['Length', 'Until the end of the season'],
+    ['Wage you cover', `${Math.round(t.wageShare * 100)}% — ${money(Math.round(player.contract.wage * t.wageShare))}/week`],
+    ['They keep paying', money(Math.round(player.contract.wage * (1 - t.wageShare)))],
+    ['Loan fee', t.fee > 0 ? money(t.fee) : 'None'],
+  ])}
+      <p class="small faint" style="margin-bottom:0">He goes back to ${esc(seller.short)} at the end of the season.
+        He counts against your registration while he is here, and you cannot sell him.</p>`,
+      footer: '<button data-close>Not yet</button><button class="primary" data-act="sign">Take him on loan</button>',
+      onMount(modal, close) {
+        modal.querySelector('[data-act="sign"]').onclick = () => {
+          completeLoan(game, player, seller.id, club.id, t);
+          delete game.negotiations[neg.id];
+          news(game, 'transfer', `Loan signing: ${player.name}`,
+            `${player.name} joins on loan from ${seller.name} until the end of the season, `
+            + `with ${club.name} covering ${Math.round(t.wageShare * 100)}% of his wage.`);
+          close();
+          app.refresh();
+          toast(`${player.name} joins on loan.`);
+        };
+      },
+    });
+    return;
+  }
+
+  const wage = player.contract?.wage || 0;
+  const last = neg.draft || {};
+  openModal({
+    title: `Loan talks — ${esc(seller.name)}`,
+    body: `
+      <div class="grid c2">
+        <section class="panel"><div class="panel-head"><h2>${esc(player.name)}</h2></div><div class="panel-body">
+          ${kv([
+    ['Position', `${player.positions.join('/')}, ${player.age}`],
+    ['Ability', String(currentAbility(player))],
+    ['His wage', `${money(wage)}/week`],
+    ['Role at ' + seller.short, ROLE_LABELS[expectedRole(world, seller, player)]],
+  ])}
+        </div></section>
+        <section class="panel"><div class="panel-head"><h2>Your Position</h2></div><div class="panel-body">
+          ${kv([
+    ['Wage room', raw(`<span class="${wageRoom > 0 ? 'good' : 'bad'}">${money(wageRoom)}/week</span>`)],
+    ['Squad size', String(club.squad.length)],
+    ['Round', String(neg.round)],
+  ])}
+          ${patienceBar({ ...neg, phase: 'fee' })}
+        </div></section>
+      </div>
+      ${logHtml(neg)}
+      <div class="field-row" style="margin-top:12px">
+        <div class="field"><label>Wage you will cover</label><select id="loan-share">
+          ${LOAN_WAGE_SHARES.map((v) => `<option value="${v}" ${v === (last.wageShare ?? 0.5) ? 'selected' : ''}>${Math.round(v * 100)}% — ${money(Math.round(wage * v))}/wk</option>`).join('')}
+        </select></div>
+        <div class="field"><label>Loan fee</label><input type="number" id="loan-fee" value="${Math.round(last.fee ?? 0)}" step="25000" min="0"></div>
+      </div>
+      <div id="loan-read" class="small faint"></div>
+      <div id="loan-feedback" class="small" style="margin-top:6px"></div>`,
+    footer: `<button data-act="walk" class="danger">Break off talks</button>
+      <button data-close>Leave it for now</button>
+      <button class="primary" data-act="offer">Make the offer</button>`,
+    onMount(modal, close) {
+      const read = modal.querySelector('#loan-read');
+      const collect = () => ({
+        wageShare: Number(modal.querySelector('#loan-share').value),
+        fee: Math.max(0, Number(modal.querySelector('#loan-fee').value) || 0),
+        weeks: 38,
+      });
+      const refresh = () => {
+        const o = collect();
+        neg.draft = o;
+        read.innerHTML = `They will read that as <b class="mono">${money(loanEquivalent(world, player, o))}</b> a week off their bill.`;
+      };
+      modal.querySelectorAll('input, select').forEach((el) => { el.oninput = refresh; el.onchange = refresh; });
+      refresh();
+
+      modal.querySelector('[data-act="walk"]').onclick = () => {
+        abandonTalks(game, neg);
+        close();
+        app.refresh();
+        toast('You have walked away from the table.');
+      };
+      modal.querySelector('[data-act="offer"]').onclick = () => {
+        const o = collect();
+        const feedback = modal.querySelector('#loan-feedback');
+        if (player.contract.wage * o.wageShare > wageRoom) {
+          feedback.innerHTML = `<span class="bad">That share breaks your wage budget. You have ${money(wageRoom)}/week.</span>`;
+          return;
+        }
+        const r = loanOffer(game, neg, o);
+        close();
+        if (r.outcome === 'collapsed') {
+          app.refresh();
+          toast(r.text, 'warn');
+          return;
+        }
+        renderLoan(app, neg);
       };
     },
   });

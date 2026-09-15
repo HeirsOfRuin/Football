@@ -18,7 +18,7 @@ import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudge
 import {
   trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole,
 } from '../engine/training.js';
-import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
+import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, completeLoan, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { pruneNegotiations } from '../engine/negotiation.js';
@@ -604,6 +604,8 @@ function runTransferDay(game, rng) {
     if (rng.chance(0.7)) {
       const deal = aiTransferAttempt(game, club, rng);
       if (deal) reportTransfer(game, deal);
+    } else if (rng.chance(0.4)) {
+      aiLoanAttempt(game, club, rng);
     } else {
       aiSquadTrim(game, club, rng);
     }
@@ -1357,6 +1359,26 @@ export function rolloverSeason(game) {
   const rng = subRng(game.rng, `rollover:${game.season}`);
   world.year += 1;
   game.season += 1;
+
+  // Loans run out at the end of the season and the player goes home. This runs
+  // before the age tick and before retirements so that a loaned-out player is
+  // back on his own club's books when anything else looks at him - a retirement
+  // processed while he was away would have taken him off the wrong squad list.
+  const returning = [];
+  for (const club of Object.values(world.clubs)) {
+    for (const id of [...(club.loanedOut || [])]) {
+      const p = world.players[id];
+      if (!p) { club.loanedOut = club.loanedOut.filter((x) => x !== id); continue; }
+      const borrower = p.clubId ? world.clubs[p.clubId] : null;
+      returnFromLoan(game, p);
+      if (club.isUserClub) returning.push({ p, borrower });
+    }
+  }
+  if (returning.length) {
+    news(game, 'squad', `${returning.length} player${returning.length === 1 ? '' : 's'} back from loan`,
+      returning.map(({ p, borrower }) => `${p.name}${borrower ? ` (${borrower.short})` : ''}`).join(', ')
+      + '. They are back in your squad and back on your full wage.');
+  }
 
   const retirements = [];
   for (const id of Object.keys(world.players)) {
