@@ -20,6 +20,7 @@ import {
 } from '../engine/training.js';
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, completeLoan, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
+import { interviewOutcome, ambitionShift } from '../data/interview.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { pruneNegotiations } from '../engine/negotiation.js';
 import { news, matchHeadline } from '../engine/news.js';
@@ -27,7 +28,7 @@ import { news, matchHeadline } from '../engine/news.js';
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 7;
+export const GAME_VERSION = 8;
 
 export function newGame(opts = {}) {
   const {
@@ -60,6 +61,7 @@ export function newGame(opts = {}) {
     shortlist: [],
     scouted: {},
     negotiations: {},
+    vacancies: [],
     status: 'idle',
     pendingMatchId: null,
     lastResults: [],
@@ -88,10 +90,29 @@ export function newGame(opts = {}) {
  * from newGame so the setup screen can build a world, let the manager browse
  * the clubs in it, and then take one over without regenerating everything.
  */
-export function takeOverClub(game, clubId, managerName, managerNat) {
+export function takeOverClub(game, clubId, managerName, managerNat, answers = null) {
   const world = game.world;
   const club = world.clubs[clubId];
   if (!club) return false;
+  // The interview comes first: its answers decide the remit and the budget the
+  // welcome message below then reports, so applying it afterwards would print
+  // the old numbers and quietly change them behind the screen.
+  const interview = answers ? applyInterview(game, club, answers) : null;
+  // The club you are leaving needs somebody real in charge. Without this it
+  // keeps the manager object carrying your name and your attributes, and goes on
+  // picking its team with them.
+  const previous = game.userClubId ? world.clubs[game.userClubId] : null;
+  if (previous && previous.id !== clubId) {
+    const rng = subRng(game.rng, `leave:${previous.id}:${game.season}:${game.day}`);
+    const n = MANAGER_NAME_MODULE.makeManagerName(rng, previous.nation);
+    previous.manager = {
+      name: n.full, nat: previous.nation, style: n.style,
+      attacking: 12, defending: 12, tactical: 12, manManagement: 12,
+      youthDev: 12, discipline: 12, reputation: previous.rep - 8, yearsAtClub: 0,
+    };
+    news(game, 'media', `You leave ${previous.name}`,
+      `${game.manager.name} departs ${previous.name} for ${club.name}. ${n.full} takes over.`);
+  }
   for (const c of Object.values(world.clubs)) c.isUserClub = false;
   club.isUserClub = true;
   game.userClubId = clubId;
@@ -112,14 +133,63 @@ export function takeOverClub(game, clubId, managerName, managerNat) {
   };
   club.tactic = autoAssignSpecialists(world, club, autoPick(world, club, club.tactic));
 
+  // Taking the job closes the vacancy, and the caretaker steps aside.
+  game.vacancies = (game.vacancies || []).filter((v) => v.clubId !== clubId);
+
   const league = world.leagues.find((l) => l.id === club.leagueId);
   news(game, 'media', 'Welcome to the hot seat',
     `${game.manager.name} takes charge of ${club.name}. The local press are keen to see what direction the new manager takes.`);
   news(game, 'board', `${world.year}/${String(world.year + 1).slice(2)} season underway`,
     `The board expect you to ${club.board.expectation.label.toLowerCase()} in the ${league.name}. `
     + `You have a transfer budget of ${money(club.finances.transferBudget)} and a wage budget of `
-    + `${money(club.finances.wageBudgetAnnual / 52)} per week.`);
+    + `${money(club.finances.wageBudgetAnnual / 52)} per week.`
+    + (interview ? ` ${interview.summary}` : ''));
   return true;
+}
+
+/**
+ * Apply what you told the board at the interview.
+ *
+ * `wantsAttacking` and `wantsYouth` have been on every club since the world was
+ * generated and nothing has ever written to them after that, so what the board
+ * judged you on was decided before you walked in the door. This is where they
+ * become your answer rather than a coin flip, and where an ambitious answer buys
+ * money at the price of a harder objective.
+ */
+export function applyInterview(game, club, answers) {
+  const world = game.world;
+  const out = interviewOutcome(answers);
+  if (out.wantsAttacking !== null) club.board.wantsAttacking = out.wantsAttacking;
+  if (out.wantsYouth !== null) club.board.wantsYouth = out.wantsYouth;
+  club.board.patience = clamp(club.board.patience + out.patienceDelta, 10, 95);
+  club.board.interview = { ...answers, ambition: out.ambition };
+
+  const budgetBefore = club.finances.transferBudget;
+  club.finances.transferBudget = Math.max(0, Math.round(budgetBefore * out.budgetMultiplier));
+  if (out.youthFacilities) {
+    club.facilities.youth = Math.min(20, club.facilities.youth + out.youthFacilities);
+  }
+
+  // The objectives are regenerated so the new remit is the one you are judged
+  // against this season, not next - and ambition moves the league finish.
+  const league = world.leagues.find((l) => l.id === club.leagueId);
+  if (league) {
+    club.board.ambitionShift = ambitionShift(out.ambition);
+    const finish = clamp((club.lastFinish ?? Math.ceil(league.teams / 2)) + club.board.ambitionShift, 1, league.teams);
+    club.board.objectives = seasonObjectives(club, league, finish, {
+      wageUsage: wageBudgetUsage(world, club).pct,
+    });
+    club.board.expectation = club.board.objectives[0];
+  }
+
+  const parts = [];
+  if (out.budgetMultiplier !== 1) {
+    parts.push(`${out.budgetMultiplier > 1 ? 'They have added to' : 'They have trimmed'} the transfer budget`
+      + ` — ${money(budgetBefore)} to ${money(club.finances.transferBudget)}`);
+  }
+  if (out.ambition > 0) parts.push('and they will hold you to what you promised');
+  else if (out.ambition < 0) parts.push('and they will give you time');
+  return { ...out, summary: parts.length ? `${parts.join(', ')}.` : '' };
 }
 
 export function userClub(game) {
@@ -503,7 +573,10 @@ export function advanceDay(game) {
   if (game.day === KEY_DAYS.youthIntake) runYouthIntake(game, dayRng);
   // Before the early return as well: talks that have gone cold should not be
   // held open by the accident of a fixture landing on a Monday.
-  if (game.day % 7 === 0) pruneNegotiations(game);
+  if (game.day % 7 === 0) {
+    pruneNegotiations(game);
+    closeExpiredVacancies(game);
+  }
 
   if (userFixture) {
     game.status = 'userMatch';
@@ -513,6 +586,10 @@ export function advanceDay(game) {
 
   // A monthly read on where the manager stands with the board.
   if (date.dayOfMonth === 2 && game.day > 90) checkBoardMood(game);
+  // ...and on whether anyone else has run out of road. Without this every post
+  // in the world came open in the same week of the summer and closed 28 days
+  // later, which is a job market that exists for a month a year.
+  if (date.dayOfMonth === 2 && game.day > 60) runManagerChurn(game, dayRng);
 
   if (game.day === KEY_DAYS.boardReview) return { stopped: true, reason: 'seasonReview' };
 
@@ -1155,13 +1232,27 @@ export function endSeason(game) {
     news(game, 'board', 'End of season review', verdict.text);
   }
 
-  // Manager churn at AI clubs.
+  // Manager churn at AI clubs. Each one is a post that was genuinely open, and
+  // an unemployed manager can go for it before the caretaker is confirmed.
   for (const club of Object.values(world.clubs)) {
     if (considerSacking(game, club, rng)) {
+      openVacancy(game, club, 'The board dismissed their manager.');
       if (club.leagueId === user?.leagueId) {
-        news(game, 'media', `${club.name} appoint a new manager`, `${club.manager.name} takes charge at ${club.name}.`);
+        news(game, 'media', `${club.name} part company with their manager`,
+          `${club.manager.name} takes temporary charge at ${club.name} while the board look for a replacement.`);
       }
     }
+  }
+
+  // A handful of managers leave of their own accord each summer. Without this,
+  // a manager sacked in a quiet year could find no job going anywhere and the
+  // career would simply stop - which is a dead end, not a difficulty.
+  const settled = Object.values(world.clubs)
+    .filter((c) => !c.affiliateOf && !c.isUserClub && !(game.vacancies || []).some((v) => v.clubId === c.id));
+  const wanted = Math.max(6, Math.round(settled.length * 0.05));
+  for (let i = 0; i < wanted && settled.length; i++) {
+    const club = rng.weighted(settled, (c) => Math.max(0.05, 1 - c.board.confidence / 110));
+    openVacancy(game, club, 'Their manager left by mutual consent.');
   }
 
   return summary;
@@ -1333,20 +1424,118 @@ export function sackManager(game) {
 }
 
 /** Clubs that would consider hiring this manager, best first. */
+/**
+ * Clubs that part with their manager during the season.
+ *
+ * Gated harder than the season-end review - a board that sacks somebody in
+ * November has really lost faith - so this adds a trickle of posts rather than
+ * multiplying the churn by twelve.
+ */
+function runManagerChurn(game, rng) {
+  const world = game.world;
+  const user = userClub(game);
+  // Board confidence at an AI club was only ever recomputed at the end of a
+  // season, so every board in the world sat on its generated figure from August
+  // to May - a measured median of 72 and a minimum of 55, which no in-season
+  // sacking rule could ever fire on. One sorted table per division a month is
+  // enough to make the number mean something while the season is running.
+  for (const league of world.leagues) {
+    const table = sortTable(league.table);
+    for (let i = 0; i < table.length; i++) {
+      const club = world.clubs[table[i].clubId];
+      if (!club || club.isUserClub || club.affiliateOf) continue;
+      updateBoardConfidence(game, club, i + 1, league.teams);
+      // Picked from the distribution, not guessed: with confidence now moving
+      // through the season the bottom of the table lands in the high twenties by
+      // May, so a threshold in the teens - the first attempt - never fired once.
+      if (club.board.confidence >= 38) continue;
+      if ((game.vacancies || []).some((v) => v.clubId === club.id)) continue;
+      // Gated harder than the season-end review - a board that sacks somebody in
+      // November has really lost faith - so this is a trickle of posts rather
+      // than twelve times the annual churn. The threshold is passed through
+      // rather than left to considerSacking's own, which is tuned for the
+      // end-of-season review and would veto every club this rule selects.
+      if (!considerSacking(game, club, rng, 38, 0.1)) continue;
+      openVacancy(game, club, 'The board lost patience mid-season.');
+      // Worth telling the manager about a job better than the one he has.
+      if (user && club.rep > user.rep + 4) {
+        news(game, 'media', `${club.name} sack their manager`,
+          `${club.name} have parted company with their manager. The post is open for the next `
+          + `${VACANCY_DAYS} days, and a club of their standing will not be short of applicants.`);
+      }
+    }
+  }
+}
+
+/** How long a post stays open before the caretaker is confirmed. */
+export const VACANCY_DAYS = 28;
+
+/**
+ * Record that a club is looking for a manager.
+ *
+ * The club is not left without one in the meantime - a caretaker takes charge,
+ * so every AI path that reads `club.manager` keeps working - but the post is
+ * genuinely open until it closes, and taking it displaces him.
+ */
+/**
+ * A day count that keeps running across a rollover.
+ *
+ * Most vacancies open in the last week of a season and the calendar resets to
+ * day zero a moment later, so a window measured in `game.day` alone would either
+ * never close or close instantly.
+ */
+function absoluteDay(game) {
+  return game.season * SEASON_DAYS + game.day;
+}
+
+export function openVacancy(game, club, reason) {
+  if (!club || club.affiliateOf || club.isUserClub) return null;
+  game.vacancies = game.vacancies || [];
+  if (game.vacancies.some((v) => v.clubId === club.id)) return null;
+  if (club.manager) club.manager.caretaker = true;
+  const vacancy = {
+    clubId: club.id, reason, openedSeason: game.season, openedDay: game.day,
+    closesAt: absoluteDay(game) + VACANCY_DAYS,
+  };
+  game.vacancies.push(vacancy);
+  return vacancy;
+}
+
+/** Posts whose window has run out: the caretaker gets the job for good. */
+export function closeExpiredVacancies(game) {
+  if (!game.vacancies?.length) return;
+  const now = absoluteDay(game);
+  game.vacancies = game.vacancies.filter((v) => {
+    const club = game.world.clubs[v.clubId];
+    if (!club || club.isUserClub) return false;
+    if (v.closesAt > now) return true;
+    if (club.manager) club.manager.caretaker = false;
+    return false;
+  });
+}
+
+/**
+ * Jobs actually going.
+ *
+ * This used to list every club in the world under a reputation ceiling,
+ * including clubs with a perfectly happy manager in post - so "looking for
+ * work" meant picking whichever of two hundred clubs you fancied. A job is now
+ * a job: somebody has to have left it.
+ */
 export function availableJobs(game) {
   const world = game.world;
   const rep = game.manager.reputation;
+  closeExpiredVacancies(game);
   const jobs = [];
-  for (const club of Object.values(world.clubs)) {
-    if (club.isUserClub) continue;
-    if (club.affiliateOf) continue; // nobody is hired to manage a reserve side
+  for (const v of game.vacancies || []) {
+    const club = world.clubs[v.clubId];
+    if (!club || club.isUserClub || club.affiliateOf) continue;
     const league = world.leagues.find((l) => l.id === club.leagueId);
     if (!league) continue;
     // A club will look at a manager whose standing is near their own.
-    const ceiling = rep + 22;
     const clubStanding = remap(club.rep, 20, 99, 8, 95);
-    if (clubStanding > ceiling) continue;
-    jobs.push({ club, league, standing: clubStanding });
+    if (clubStanding > rep + 22) continue;
+    jobs.push({ club, league, standing: clubStanding, vacancy: v });
   }
   return sortBy(jobs, { key: (j) => j.standing, desc: true }).slice(0, 40);
 }

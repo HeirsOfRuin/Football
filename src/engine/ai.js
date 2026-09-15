@@ -63,13 +63,20 @@ export function updateBoardConfidence(game, club, position, teams) {
 }
 
 /** Sack the manager if confidence collapses. Returns true if a change happened. */
-export function considerSacking(game, club, rng) {
+/**
+ * `threshold` and `odds` are arguments because there are now two moments a board
+ * can act - the end-of-season review and a monthly check while the season runs -
+ * and they should not agree. A hardcoded 22 inside here silently vetoed the
+ * mid-season rule for a whole build: its own gate let clubs through and this one
+ * turned every single one of them away, so no post ever came open in-season.
+ */
+export function considerSacking(game, club, rng, threshold = 22, odds = null) {
   // Nobody sacks a reserve-team coach; the side exists at the parent's pleasure.
   if (club.affiliateOf) return false;
   if (club.isUserClub) return false;
   const board = club.board;
-  if (board.confidence > 22) return false;
-  const patience = remap(board.patience, 20, 90, 0.35, 0.08);
+  if (board.confidence > threshold) return false;
+  const patience = odds ?? remap(board.patience, 20, 90, 0.35, 0.08);
   if (!rng.chance(patience)) return false;
   const nation = club.nation;
   const n = makeManagerName(rng, nation);

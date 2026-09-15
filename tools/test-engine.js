@@ -22,6 +22,7 @@ import {
 import {
   newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub,
   takeOverClub, dismissalCompensation, evaluateRequest, makeRequest, managerContract, userSackRisk,
+  availableJobs, openVacancy, closeExpiredVacancies, VACANCY_DAYS, applyInterview,
 } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -29,6 +30,7 @@ import { SEASON_DAYS } from '../src/core/calendar.js';
 import { registrationLimit, refreshRegistration, buildLineup as buildXI } from '../src/engine/lineup.js';
 import { wageBudgetUsage } from '../src/engine/finance.js';
 import { leagueObjective, cupObjective, remitObjective, objectiveScore, seasonObjectives } from '../src/data/objectives.js';
+import { INTERVIEW_QUESTIONS, interviewOutcome, ambitionShift, defaultAnswers } from '../src/data/interview.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 import {
   openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
@@ -769,6 +771,77 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('a negotiation survives a save', !!back7
     && back7.reserve === n7.reserve && back7.patience === n7.patience && back7.round === n7.round,
     back7 ? 'kept' : 'lost');
+}
+
+// --- A job is a job ----------------------------------------------------------
+{
+  const gj = newGame({ seed: 5150, size: 'small', managerName: 'Test', clubId: null });
+  const wj = gj.world;
+  const topj = wj.leagues.find((l) => l.tier === 1);
+
+  // Before any manager has left a post, nothing is going. The old version of
+  // this listed every club in the world under a reputation ceiling, so being
+  // out of work meant picking whichever of two hundred clubs you fancied.
+  check('nothing is going before anybody leaves', availableJobs(gj).length === 0,
+    `${availableJobs(gj).length} jobs`);
+
+  const spare = Object.values(wj.clubs).find((c) => !c.affiliateOf && !c.isUserClub && c.rep < 60);
+  const vacancy = openVacancy(gj, spare, 'Test vacancy');
+  check('a vacancy can be opened', !!vacancy && spare.manager.caretaker === true);
+  check('the same post cannot be opened twice', openVacancy(gj, spare, 'again') === null);
+  gj.manager.reputation = 90;
+  const jobs = availableJobs(gj);
+  check('an open post shows up as a job', jobs.some((j) => j.club.id === spare.id));
+  check('a job carries the reason it is open', jobs.find((j) => j.club.id === spare.id)?.vacancy.reason === 'Test vacancy');
+  check('every listed job is actually open',
+    jobs.every((j) => j.club.manager?.caretaker === true), `${jobs.filter((j) => !j.club.manager?.caretaker).length} settled`);
+
+  // The window has to close, or every post that ever opened stays open forever.
+  gj.day += VACANCY_DAYS + 1;
+  closeExpiredVacancies(gj);
+  check('a post that nobody took closes', availableJobs(gj).length === 0);
+  check('and the caretaker gets the job', spare.manager.caretaker === false);
+
+  // Every answer has to move something. An interview where the middle option is
+  // always right is a form, not a decision.
+  const cautious = interviewOutcome({ style: 'pragmatic', youth: 'balance', transfers: 'sell' });
+  const ambitious = interviewOutcome({ style: 'attacking', youth: 'blood', transfers: 'spend' });
+  check('an ambitious answer buys money', ambitious.budgetMultiplier > cautious.budgetMultiplier,
+    `${ambitious.budgetMultiplier.toFixed(2)} v ${cautious.budgetMultiplier.toFixed(2)}`);
+  check('a cautious answer buys time', cautious.patienceDelta > ambitious.patienceDelta,
+    `${cautious.patienceDelta} v ${ambitious.patienceDelta}`);
+  check('ambition raises the bar', ambitionShift(ambitious.ambition) < ambitionShift(cautious.ambition),
+    `${ambitionShift(ambitious.ambition)} v ${ambitionShift(cautious.ambition)}`);
+  check('every question has three answers that differ',
+    INTERVIEW_QUESTIONS.every((q) => q.answers.length === 3
+      && new Set(q.answers.map((a) => JSON.stringify(a.effects))).size === 3));
+  record('interview budget swing, cautious to ambitious',
+    `x${cautious.budgetMultiplier.toFixed(2)} to x${ambitious.budgetMultiplier.toFixed(2)}`);
+
+  // ...and applying them has to reach the club, not just the summary.
+  const gk = newGame({ seed: 5150, size: 'small', managerName: 'Test', clubId: null });
+  const target = gk.world.clubs[gk.world.leagues.find((l) => l.tier === 1).clubIds[9]];
+  const budgetBefore = target.finances.transferBudget;
+  const patienceBefore = target.board.patience;
+  takeOverClub(gk, target.id, 'Test', 'ALB', { style: 'attacking', youth: 'blood', transfers: 'spend' });
+  check('the interview reaches the budget', target.finances.transferBudget > budgetBefore * 1.3,
+    `${budgetBefore} -> ${target.finances.transferBudget}`);
+  check('the interview reaches the remit', target.board.wantsYouth === true && target.board.wantsAttacking === true);
+  // wantsYouth and wantsAttacking were set at world generation and never written
+  // again, so the remit was decided before the manager walked in.
+  check('the remit objective follows the answers', target.board.objectives[2].type === 'youth',
+    target.board.objectives[2].type);
+  check('an ambitious answer is written into the objectives', target.board.ambitionShift < 0,
+    String(target.board.ambitionShift));
+
+  const gc = newGame({ seed: 5150, size: 'small', managerName: 'Test', clubId: null });
+  const target2 = gc.world.clubs[gc.world.leagues.find((l) => l.tier === 1).clubIds[9]];
+  const budget2 = target2.finances.transferBudget;
+  takeOverClub(gc, target2.id, 'Test', 'ALB', { style: 'pragmatic', youth: 'balance', transfers: 'sell' });
+  check('a cautious answer costs money and buys patience',
+    target2.finances.transferBudget < budget2 && target2.board.patience > patienceBefore,
+    `${budget2} -> ${target2.finances.transferBudget}, patience ${Math.round(patienceBefore)} -> ${Math.round(target2.board.patience)}`);
+  check('taking the job clears the post', !(gc.vacancies || []).some((v) => v.clubId === target2.id));
 }
 
 // --- Loans and part-exchange -------------------------------------------------

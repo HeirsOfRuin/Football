@@ -1,7 +1,8 @@
 // End-of-season summary shown between campaigns.
 
-import { esc, openModal, money, badge, panelTight, emptyState } from '../components.js';
-import { userClub, sortTable } from '../../state/game.js';
+import { esc, openModal, money, badge, panelTight, emptyState, kv } from '../components.js';
+import { INTERVIEW_QUESTIONS, interviewOutcome, ambitionShift, defaultAnswers } from '../../data/interview.js';
+import { userClub, sortTable, availableJobs } from '../../state/game.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { sortBy } from '../../core/util.js';
 
@@ -112,12 +113,14 @@ export function showJobMarket(app, jobs, onTake) {
     title: 'Vacancies',
     wide: true,
     body: jobs.length === 0
-      ? '<p>No club will consider you at present. Your career is over — for this save at least.</p>'
-      : `<p class="small faint" style="margin-top:0">Clubs within reach of a manager of your standing. Taking a lower job and
-         succeeding is the way back up.</p>
+      ? `<p>No club is looking for a manager at the moment, at least not one of your standing.</p>
+         <p class="small faint">Posts come open through the season as boards lose patience, and a fresh batch
+           every summer. Keep going and something will turn up.</p>`
+      : `<p class="small faint" style="margin-top:0">Posts that are actually going, within reach of a manager of your
+         standing. Taking a lower job and succeeding is the way back up.</p>
       <div class="scroll-y" style="max-height:440px"><table><thead><tr>
         <th></th><th>Club</th><th>Division</th><th class="num">Reputation</th><th class="num">Squad</th>
-        <th class="num">Transfer budget</th><th>Expectation</th><th></th></tr></thead><tbody>
+        <th class="num">Transfer budget</th><th>Why it is open</th><th></th></tr></thead><tbody>
       ${jobs.map((j) => `<tr>
         <td>${badge(j.club, 20)}</td>
         <td class="nowrap">${esc(j.club.name)}</td>
@@ -125,15 +128,85 @@ export function showJobMarket(app, jobs, onTake) {
         <td class="num">${j.club.rep}</td>
         <td class="num">${Math.round(squadStrength(world, j.club))}</td>
         <td class="num">${money(j.club.finances.transferBudget)}</td>
-        <td class="small">${esc(j.club.board.expectation.label)}</td>
-        <td><button class="sm primary" data-take="${esc(j.club.id)}">Accept</button></td>
+        <td class="small faint">${esc(j.vacancy?.reason || 'The post is open.')}</td>
+        <td><button class="sm primary" data-take="${esc(j.club.id)}">Interview</button></td>
       </tr>`).join('')}</tbody></table></div>`,
     footer: '<button data-act="menu">Retire to the main menu</button>',
     onMount(modal, close) {
       modal.querySelectorAll('[data-take]').forEach((b) => {
-        b.onclick = () => { close(); onTake(b.dataset.take); };
+        const job = jobs.find((j) => j.club.id === b.dataset.take);
+        b.onclick = () => { close(); showInterview(app, job, onTake); };
       });
       modal.querySelector('[data-act="menu"]').onclick = () => { close(); app.go('menu'); };
     },
   });
+}
+
+/**
+ * The interview.
+ *
+ * Accepting a job used to be one click, after which the board handed you a
+ * remit and a budget you had no say in — `wantsAttacking` and `wantsYouth` were
+ * set at world generation and never written again, so what you would be judged
+ * on was decided before you walked in. Each answer here moves something real,
+ * and the panel underneath shows what, from the same function that applies it.
+ */
+export function showInterview(app, job, onTake) {
+  const club = job.club;
+  const answers = defaultAnswers();
+
+  const consequences = () => {
+    const out = interviewOutcome(answers);
+    const budget = Math.round(club.finances.transferBudget * out.budgetMultiplier);
+    const shift = ambitionShift(out.ambition);
+    const rows = [
+      ['Transfer budget', `${money(club.finances.transferBudget)} → ${money(budget)}`],
+      ['Style objective', out.wantsAttacking ? 'They will want goals' : 'None'],
+      ['Youth objective', out.wantsYouth ? 'Three young players given regular football' : 'None'],
+      ['Board patience', out.patienceDelta === 0 ? 'As it stands'
+        : `${out.patienceDelta > 0 ? 'More' : 'Less'} than usual (${out.patienceDelta > 0 ? '+' : ''}${out.patienceDelta})`],
+      ['League finish they will want', shift === 0 ? 'As it stands'
+        : shift < 0 ? `${Math.abs(shift)} place${Math.abs(shift) === 1 ? '' : 's'} higher than last season`
+          : `${shift} place${shift === 1 ? '' : 's'} lower than last season`],
+    ];
+    return kv(rows);
+  };
+
+  const render = () => {
+    openModal({
+      title: `Interview — ${club.name}`,
+      wide: true,
+      body: `
+        <div class="row" style="gap:14px;margin-bottom:12px">${badge(club, 44)}
+          <div><div style="font-size:18px;font-weight:600">${esc(club.name)}</div>
+          <div class="muted">${esc(job.league.name)} — ${esc(job.vacancy?.reason || 'the post is open')}</div></div>
+        </div>
+        ${INTERVIEW_QUESTIONS.map((q) => `
+          ${panelTight(q.question, `<div class="stack">${q.answers.map((a) => `
+            <label class="row" style="gap:8px;align-items:flex-start;padding:6px 0;cursor:pointer">
+              <input type="radio" name="q-${esc(q.id)}" value="${esc(a.id)}" ${answers[q.id] === a.id ? 'checked' : ''}>
+              <span><span>${esc(a.label)}</span><div class="small faint">${esc(a.detail)}</div></span>
+            </label>`).join('')}</div>`)}`).join('')}
+        ${panelTight('What that commits you to', `<div id="iv-out">${consequences()}</div>`)}`,
+      footer: `<button data-act="back">Look at other jobs</button>
+        <button class="primary" data-act="accept">Take the job</button>`,
+      onMount(modal, close) {
+        modal.querySelectorAll('input[type=radio]').forEach((el) => {
+          el.onchange = () => {
+            answers[el.name.slice(2)] = el.value;
+            modal.querySelector('#iv-out').innerHTML = consequences();
+          };
+        });
+        modal.querySelector('[data-act="back"]').onclick = () => {
+          close();
+          showJobMarket(app, availableJobs(app.game), onTake);
+        };
+        modal.querySelector('[data-act="accept"]').onclick = () => {
+          close();
+          onTake(club.id, answers);
+        };
+      },
+    });
+  };
+  render();
 }

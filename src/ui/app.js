@@ -262,8 +262,8 @@ export const app = {
 
   async openJobMarket() {
     const { showJobMarket } = await import('./screens/seasonreview.js');
-    showJobMarket(this, availableJobs(this.game), (clubId) => {
-      takeOverClub(this.game, clubId, this.game.manager.name, this.game.manager.nat);
+    showJobMarket(this, availableJobs(this.game), (clubId, answers) => {
+      takeOverClub(this.game, clubId, this.game.manager.name, this.game.manager.nat, answers);
       this.go('dashboard');
       this.autosave();
       toast(`You are the new manager of ${this.game.world.clubs[clubId].name}.`);

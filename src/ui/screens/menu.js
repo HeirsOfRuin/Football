@@ -1,6 +1,6 @@
 // Main menu, new-game setup and the load screen.
 
-import { html, esc, panel, toast, money, badge, openModal, confirmDialog } from '../components.js';
+import { html, esc, panel, toast, money, badge, openModal } from '../components.js';
 import { WORLD_SIZES, NATIONS } from '../../data/nations.js';
 import { newGame, takeOverClub } from '../../state/game.js';
 import { squadStrength } from '../../gen/worldgen.js';
@@ -8,6 +8,7 @@ import { listSaves, loadGame, deleteSave, importGameFile } from '../../state/sto
 import { listLibrary } from '../../state/library.js';
 import { sortBy } from '../../core/util.js';
 import { currentAbility } from '../../data/attributes.js';
+import { showInterview } from './seasonreview.js';
 
 let mode = 'main';
 let setup = null;
@@ -184,18 +185,21 @@ function renderPickClub(app) {
       };
       root.querySelector('[data-act="back"]').onclick = () => { mode = 'setup'; previewGame = null; app.render(); };
       root.querySelectorAll('[data-take]').forEach((btn) => {
-        btn.onclick = async () => {
+        btn.onclick = () => {
           const club = world.clubs[btn.dataset.take];
-          const ok = await confirmDialog('Take the job?',
-            `Manage ${club.name}? The board expect you to ${club.board.expectation.label.toLowerCase()}.`, 'Accept');
-          if (!ok) return;
-          takeOverClub(previewGame, club.id, previewGame.manager.name, previewGame.manager.nat);
-          app.game = previewGame;
-          app.currentSlot = `slot_${Date.now().toString(36)}`;
-          previewGame = null;
-          mode = 'main';
-          app.go('dashboard');
-          app.autosave();
+          // Starting a career goes through the same interview as taking a job
+          // mid-career. It is the first real decision either way, and having one
+          // path ask and the other not would mean two kinds of appointment.
+          showInterview(app, { club, league, vacancy: { reason: 'They are looking for a new manager.' } },
+            (clubId, answers) => {
+              takeOverClub(previewGame, clubId, previewGame.manager.name, previewGame.manager.nat, answers);
+              app.game = previewGame;
+              app.currentSlot = `slot_${Date.now().toString(36)}`;
+              previewGame = null;
+              mode = 'main';
+              app.go('dashboard');
+              app.autosave();
+            });
         };
       });
     },

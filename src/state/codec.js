@@ -194,6 +194,7 @@ export function serialiseGame(game) {
       shortlist: game.shortlist,
       scouted: game.scouted,
       negotiations: game.negotiations || {},
+      vacancies: game.vacancies || [],
       offers: game.offers || [],
       status: 'idle',
       pendingMatchId: null,
@@ -293,6 +294,12 @@ export function migrateSave(data) {
   if (version < 7 && data.game && !data.game.negotiations) {
     data.game.negotiations = {};
   }
+  // v7 -> v8: a job is a job now, so the world keeps a list of the posts that
+  // are actually going. An older save simply starts with none; the next season
+  // rollover opens a fresh batch, so a career never dead-ends waiting for one.
+  if (version < 8 && data.game && !data.game.vacancies) {
+    data.game.vacancies = [];
+  }
   // Loans exist now, so every club needs somewhere to record who it has lent
   // out - the parent's half of a split wage is charged off that list.
   if (version < 7 && data.world?.clubs) {
@@ -358,6 +365,7 @@ export function deserialiseGame(raw) {
     shortlist: g.shortlist || [],
     scouted: g.scouted || {},
     negotiations: g.negotiations || {},
+    vacancies: g.vacancies || [],
     offers: g.offers || [],
     status: 'idle',
     pendingMatchId: null,

@@ -1,7 +1,7 @@
 // Club screen: board, facilities, training and history.
 
 import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar, toast } from '../components.js';
-import { userClub, BOARD_REQUESTS, evaluateRequest, makeRequest } from '../../state/game.js';
+import { userClub, BOARD_REQUESTS, evaluateRequest, makeRequest, availableJobs, takeOverClub } from '../../state/game.js';
 import { showPlayer } from '../playerProfile.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { money } from '../../core/util.js';
@@ -46,6 +46,19 @@ export function render(app) {
       root.querySelectorAll('[data-player]').forEach((el) => {
         el.onclick = () => showPlayer(app, el.dataset.player);
       });
+      root.querySelectorAll('[data-job]').forEach((b) => {
+        b.onclick = async (e) => {
+          e.stopPropagation();
+          const job = availableJobs(app.game).find((j) => j.club.id === b.dataset.job);
+          if (!job) return;
+          const { showInterview } = await import('./seasonreview.js');
+          showInterview(app, job, (clubId, answers) => {
+            takeOverClub(app.game, clubId, app.game.manager.name, app.game.manager.nat, answers);
+            app.go('dashboard');
+            toast(`You are the new manager of ${app.game.world.clubs[clubId].name}.`);
+          });
+        };
+      });
       root.querySelectorAll('[data-request]').forEach((b) => {
         b.onclick = (e) => {
           e.stopPropagation();
@@ -88,6 +101,8 @@ function overviewView(app, club, league) {
     ${panel('Ask the board', `${requestList(app, club)}
       <p class="small faint" style="margin-bottom:0">One request a season. The board have to rate your work
         and the club has to be able to afford it.</p>`)}
+
+    ${panel('Elsewhere', `${vacancyList(app)}`)}
   </div>`;
 }
 
@@ -101,6 +116,28 @@ function objectiveList(app, club) {
     return `<tr><td class="small">${esc(o.label)}</td>
       <td class="small right nowrap">${o.detail ? `<span class="faint">${esc(o.detail)}</span> ` : ''}${mark}</td></tr>`;
   }).join('')}</tbody></table></div>`;
+}
+
+/**
+ * Jobs going at other clubs.
+ *
+ * A post that opens in November is worth nothing to a manager with no way to
+ * see it, and leaving for a bigger club mid-season is a real part of the job.
+ */
+function vacancyList(app) {
+  const jobs = availableJobs(app.game);
+  if (!jobs.length) {
+    return `<p class="small faint" style="margin-bottom:0">No club is looking for a manager at the moment.
+      Posts come open through the season as boards lose patience, and a fresh batch every summer.</p>`;
+  }
+  return `<div class="table-wrap"><table><tbody>${jobs.slice(0, 8).map((j) => `<tr>
+      <td class="small nowrap">${esc(j.club.name)}<div class="small faint">${esc(j.league.name)}</div></td>
+      <td class="small faint">${esc(j.vacancy?.reason || '')}</td>
+      <td class="small num">rep ${j.club.rep}</td>
+      <td class="right"><button class="ghost small" data-job="${esc(j.club.id)}">Interview</button></td>
+    </tr>`).join('')}</tbody></table></div>
+    <p class="small faint" style="margin:8px 0 0">Walking out on a club mid-season is your business, not the board's,
+      but the one you leave will not forget it.</p>`;
 }
 
 function requestList(app, club) {
