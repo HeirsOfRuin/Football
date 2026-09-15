@@ -216,6 +216,19 @@ export function migrateSave(data) {
   // v1 -> v2: players carried a stored `value` that is now derived on demand.
   // Nothing reads the old field, so there is nothing to move; the version is
   // stamped forward so the next migration knows where it starts from.
+
+  // v2 -> v3: clubs gained a visual identity. Without this an old save would
+  // draw generated crests from the id hash while the tactics pitch kept showing
+  // the club's original random colour pair, and the two would not match.
+  if (version < 3 && data.world?.clubs) {
+    for (const id in data.world.clubs) {
+      const club = data.world.clubs[id];
+      if (club.identity) continue;
+      club.identity = IDENTITY_MODULE.fallbackIdentity(club);
+      const pal = IDENTITY_MODULE.paletteFor(club.identity);
+      club.colours = { primary: pal.primary, secondary: pal.secondary };
+    }
+  }
   return { ...data, v: GAME_VERSION };
 }
 
@@ -266,6 +279,7 @@ export function deserialiseGame(raw) {
 
 // Imported lazily to avoid a cycle between the codec and the data modules.
 import * as NATION_MODULE from '../data/nations.js';
+import * as IDENTITY_MODULE from '../gen/identity.js';
 import { personalityFor } from '../gen/playergen.js';
 import { Rng } from '../core/rng.js';
 

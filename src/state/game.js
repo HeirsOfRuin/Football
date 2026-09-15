@@ -23,7 +23,7 @@ import { news, matchHeadline } from '../engine/news.js';
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 2;
+export const GAME_VERSION = 3;
 
 export function newGame(opts = {}) {
   const {

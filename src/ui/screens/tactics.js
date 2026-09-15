@@ -11,6 +11,7 @@ import { familiarity, familiarityLabel, currentAbility, POSITION_LABELS } from '
 import { teamStrength } from '../../engine/ratings.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
+import { kitUri } from '../../gen/identity.js';
 
 export function render(app) {
   const game = app.game;
@@ -72,7 +73,7 @@ export function render(app) {
     const famCls = fam >= 16 ? '' : fam >= 12 ? 'border-color:var(--warn)' : 'border-color:var(--bad)';
     return `<div class="pitch-slot ${state.selectedSlot === i ? 'selected' : ''} ${p ? '' : 'empty'}"
               data-slot="${i}" style="left:${8 + s.slot.x * 0.84}%;bottom:${7 + s.slot.y * 0.85}%">
-              <div class="shirt" style="background:${esc(club.colours.primary)};color:${esc(club.colours.secondary)};${p ? famCls : ''}">
+              <div class="shirt" style="background-image:url('${kitUri(club)}');${p ? famCls : ''}">
                 ${p ? (p.squadNumber ?? '') : s.slot.pos}</div>
               <div class="pname">${esc(p ? p.short : '—')}</div>
               <div class="prole">${esc(role ? shortRole(role.name) : s.slot.pos)}</div>

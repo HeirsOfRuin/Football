@@ -5,6 +5,7 @@ import { money as fmtMoney, clamp, remap } from '../core/util.js';
 import { marketValue } from '../engine/transfers.js';
 import { currentAbility, POSITION_GROUP, familiarity, familiarityLabel } from '../data/attributes.js';
 import { shortDate, formatDay } from '../core/calendar.js';
+import { crestUri, kitUri } from '../gen/identity.js';
 
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -29,8 +30,18 @@ export const money = fmtMoney;
 
 export function badge(club, size = 26) {
   if (!club) return '';
-  const c = club.colours || { primary: '#333', secondary: '#fff' };
-  return `<span class="badge" style="width:${size}px;height:${size}px;background:${esc(c.primary)};color:${esc(c.secondary)};font-size:${Math.round(size * 0.38)}px">${esc(club.code || '')}</span>`;
+  // One chokepoint for every crest in the game: eighteen call sites draw through
+  // here, so the art is swapped in one place. The rendered crest does not depend
+  // on the size it is drawn at, so the memoised string serves them all.
+  return `<img class="badge" alt="${esc(club.code || club.short || '')}" title="${esc(club.name || '')}"`
+    + ` width="${size}" height="${size}" style="width:${size}px;height:${size}px" src="${crestUri(club)}">`;
+}
+
+/** The club's kit, for shirts on the tactics pitch. */
+export function kit(club, size = 26) {
+  if (!club) return '';
+  return `<img class="kit-img" alt="" width="${size}" height="${size}"`
+    + ` style="width:${size}px;height:${size}px" src="${kitUri(club)}">`;
 }
 
 export function formRun(form = []) {

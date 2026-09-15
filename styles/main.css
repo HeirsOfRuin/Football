@@ -95,10 +95,11 @@ a { color: var(--accent); }
 .brand .club-strip { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .brand .club-name { font-size: 13px; color: var(--text-dim); line-height: 1.25; }
 
+/* Crests are 16x16 pixel art scaled up, so they must not be smoothed. */
 .badge {
-  width: 26px; height: 26px; border-radius: 5px; flex: 0 0 auto;
-  display: grid; place-items: center; font-size: 10px; font-weight: 700;
-  font-family: var(--mono); letter-spacing: .02em;
+  width: 26px; height: 26px; flex: 0 0 auto; display: block;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+  object-fit: contain;
 }
 
 .nav { flex: 1; overflow-y: auto; padding: 8px 0; }
@@ -251,14 +252,22 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
   width: 62px; text-align: center; cursor: pointer; user-select: none;
 }
 .pitch-slot .shirt {
-  width: 30px; height: 30px; margin: 0 auto 3px; border-radius: 5px;
+  width: 30px; height: 30px; margin: 0 auto 3px;
   display: grid; place-items: center; font-family: var(--mono);
-  font-size: 12px; font-weight: 700; border: 1px solid rgba(0,0,0,.4);
+  font-size: 12px; font-weight: 700;
+  background-size: contain; background-repeat: no-repeat; background-position: center;
+  image-rendering: pixelated; image-rendering: crisp-edges;
+  /* The number sits on top of a generated kit whose colours are not known here,
+     so it cannot borrow the club's own palette and stay readable — a light
+     number on a light kit disappears. White inside a hard dark outline reads on
+     every kit the generator can produce. */
+  color: #fff;
+  text-shadow: 0 0 2px #000, 0 1px 0 #000, 1px 0 0 #000, -1px 0 0 #000, 0 -1px 0 #000;
 }
 .pitch-slot .pname { font-size: 10.5px; line-height: 1.15; color: var(--text); text-shadow: 0 1px 2px #000; }
 .pitch-slot .prole { font-size: 9px; color: var(--text-faint); line-height: 1.1; }
 .pitch-slot.selected .shirt { outline: 2px solid var(--accent); outline-offset: 2px; }
-.pitch-slot.empty .shirt { background: #223028 !important; color: var(--text-faint); border-style: dashed; }
+.pitch-slot.empty .shirt { background-image: none !important; background: #223028; color: var(--text-faint); border: 1px dashed rgba(255,255,255,.25); border-radius: 5px; }
 
 /* ---------- Match view ---------- */
 

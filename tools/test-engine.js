@@ -17,6 +17,7 @@ import { newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub }
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
 import { SEASON_DAYS } from '../src/core/calendar.js';
+import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 
 let passed = 0;
 let failed = 0;
@@ -217,7 +218,18 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   // position ignores, the rate is a lie and prospects stall for years while
   // every individual number looks fine. Assert the share, not the magnitude.
   const rng = new Rng(31337);
-  const club = Object.values(world.clubs)[0];
+  // An explicitly ordinary club, not whichever one happens to be first in the
+  // world. The rate scales with facilities and coaching, so pinning a magnitude
+  // to an arbitrary club makes this assertion a hostage to generation order: any
+  // change to how many random draws worldgen makes silently re-rolls the club
+  // this reads, and the test fails for a reason that has nothing to do with
+  // development.
+  const club = {
+    facilities: { training: 10, youth: 10, scouting: 10, medical: 10 },
+    coaching: { attacking: 10, defending: 10, fitness: 10, gk: 10 },
+    trainingFocus: 'Balanced',
+    trainingIntensity: 'Balanced',
+  };
   const make = (age, ca, pa, minutes) => {
     const p = generatePlayer(rng, { nationId: 'ALB', pos: 'ST', age, targetCA: ca, targetPA: pa, clubRep: 75, leagueRep: 85 });
     p.season.minutes = minutes;
@@ -350,6 +362,71 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('a new season schedules fixtures', Object.keys(game.fixtures).length > 1000);
   const squads = Object.values(game.world.clubs).map((c) => c.squad.length);
   check('no club is left without a squad', Math.min(...squads) >= 16, `smallest squad ${Math.min(...squads)}`);
+}
+
+// --- Club identity -----------------------------------------------------------
+{
+  const world = generateWorld({ seed: 606, size: 'small' });
+  const clubs = Object.values(world.clubs);
+
+  check('every club has an identity', clubs.every((c) => c.identity && c.identity.charge));
+  check('every club has colours derived from its identity', clubs.every((c) => {
+    const pal = paletteFor(c.identity);
+    return c.colours.primary === pal.primary && c.colours.secondary === pal.secondary;
+  }));
+
+  // The point of assigning identity per division rather than per club: twenty
+  // independent random colour pairs collide constantly. Before this, roughly
+  // seven clubs in a twenty-team division shared a pair with another.
+  let worstGap = 360;
+  let worstLeague = '';
+  for (const league of world.leagues) {
+    const hues = league.clubIds.map((id) => world.clubs[id].identity.hue).sort((a, b) => a - b);
+    for (let i = 1; i < hues.length; i++) {
+      if (hues[i] - hues[i - 1] < worstGap) { worstGap = hues[i] - hues[i - 1]; worstLeague = league.name; }
+    }
+  }
+  // Slots are 360/n apart with jitter of at most 0.24 of a slot either way, so
+  // the closest two clubs in the largest division can be is about half a slot.
+  const biggest = Math.max(...world.leagues.map((l) => l.clubIds.length));
+  const floorGap = (360 / biggest) * 0.5;
+  check('no two clubs in a division share a hue', worstGap >= floorGap,
+    `closest pair ${worstGap.toFixed(1)}deg in ${worstLeague}, floor ${floorGap.toFixed(1)}deg`);
+  record('closest club hues in a division', `${worstGap.toFixed(1)} degrees`);
+
+  // Art is generated, so the assertions have to be about the pixels, not about
+  // the call returning something.
+  const sample = clubs.slice(0, 40);
+  check('crests render as svg', sample.every((c) => crestSvg(c).startsWith('<svg') && crestSvg(c).includes('<path')));
+  check('kits render as svg', sample.every((c) => kitSvg(c).startsWith('<svg')));
+  check('crests differ between clubs', new Set(sample.map((c) => crestSvg(c))).size === sample.length);
+  check('crest art is deterministic', sample.every((c) => crestSvg(c) === crestSvg(c)));
+
+  // A crest whose charge is the same colour as the field under it is invisible,
+  // which is exactly the defect that only showed up on a contact sheet.
+  const chargeVisible = sample.every((c) => {
+    const svg = crestSvg(c);
+    const pal = paletteFor(c.identity);
+    // The secondary is the charge colour; it must actually appear in the art.
+    return svg.includes(pal.secondary);
+  });
+  check('every crest draws its charge in a contrasting colour', chargeVisible);
+
+  // These strings are inlined into a fixture list forty times, so their size is
+  // a real cost rather than a curiosity.
+  const uriBytes = Math.max(...sample.map((c) => crestUri(c).length));
+  check('crest data uris stay small', uriBytes < 2600, `largest ${uriBytes} bytes`);
+  record('largest crest data uri', `${uriBytes} bytes`);
+
+  // Re-running the generator on the same clubs with the same stream must give
+  // the same world back, or a save would not match the game that wrote it.
+  const world2 = generateWorld({ seed: 606, size: 'small' });
+  check('identities are seed-deterministic',
+    Object.values(world2.clubs).every((c) => c.identity.hue === world.clubs[c.id].identity.hue));
+
+  // A club with no identity at all still has to draw something: old saves.
+  const orphan = { id: 'cZZ', name: 'Nowhere FC' };
+  check('a club without an identity still renders', crestSvg(orphan).startsWith('<svg'));
 }
 
 // --- The pyramid has edges ---------------------------------------------------

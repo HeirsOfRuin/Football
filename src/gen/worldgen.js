@@ -1,6 +1,7 @@
 // World generation: nations -> leagues -> clubs -> squads -> staff -> finances.
 
 import { Rng, subRng } from '../core/rng.js';
+import { assignIdentities } from './identity.js';
 import { clamp, remap, sortBy } from '../core/util.js';
 import {
   NATION_BY_ID, LEAGUE_TEMPLATES, WORLD_SIZES, CONTINENTAL, SECONDARY_CONTINENTAL,
@@ -12,14 +13,6 @@ import { defaultTactic } from '../data/tactics.js';
 import { currentAbility } from '../data/attributes.js';
 import { makeCityNamer, makeClubNamer, shortenClubName, clubCode, makeStadiumName, makeManagerName } from './names.js';
 import { generatePlayer, estimateWage, estimateValue, resetPlayerCounter, emptyStats } from './playergen.js';
-
-const KIT_COLOURS = [
-  ['#d62828', '#ffffff'], ['#003049', '#f5f5f5'], ['#1b4332', '#ffd60a'], ['#5a189a', '#ffffff'],
-  ['#0b5394', '#e8e8e8'], ['#8d0801', '#f4d58d'], ['#023047', '#fb8500'], ['#212529', '#f8f9fa'],
-  ['#006d77', '#edf6f9'], ['#7f5539', '#f0ead2'], ['#432818', '#ffe6a7'], ['#14213d', '#fca311'],
-  ['#2b2d42', '#edf2f4'], ['#606c38', '#fefae0'], ['#9d0208', '#ffba08'], ['#3a0ca3', '#4cc9f0'],
-  ['#b5179e', '#f1faee'], ['#1d3557', '#a8dadc'], ['#e63946', '#1d3557'], ['#f77f00', '#003049'],
-];
 
 /** Positional make-up of a generated squad. */
 const SQUAD_TEMPLATE = [
@@ -239,7 +232,6 @@ export function generateWorld(opts = {}) {
         const city = cityNamer();
         const name = clubNamer(city);
         const rep = Math.round(reps[i]);
-        const [primary, secondary] = nRng.pick(KIT_COLOURS);
         // Non-league grounds hold hundreds, not fifteen thousand.
         const capBase = 400 + Math.pow(clamp((rep - 8) / 91, 0, 1), 2.1) * 73000;
         const capStep = capBase < 4000 ? 50 : 500;
@@ -255,7 +247,7 @@ export function generateWorld(opts = {}) {
           city,
           founded: nRng.int(1878, 1974),
           rep,
-          colours: { primary, secondary },
+          colours: null, // filled by assignIdentities once the division is complete
           stadium: { name: makeStadiumName(nRng, nationId, city), capacity },
           squad: [],
           tactic: defaultTactic(nRng.pick(['4-4-2', '4-2-3-1', '4-3-3', '4-1-4-1', '3-5-2', '4-4-2 Diamond'])),
@@ -322,6 +314,10 @@ export function generateWorld(opts = {}) {
         league.clubIds.push(club.id);
         world.clubs[club.id] = club;
       }
+
+      // Done once the division is full: hues are spread across the clubs in it,
+      // which cannot be decided one club at a time.
+      assignIdentities(subRng(nRng, `identity:${league.id}`), league.clubIds.map((id) => world.clubs[id]));
     }
   }
 

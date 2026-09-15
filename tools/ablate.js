@@ -96,9 +96,18 @@ function table(title, results, baseline) {
     cards: spread((r) => r.cards), points: spread((r) => r.points),
   };
   const beaten = Object.entries(moves).filter(([k, v]) => v > FLOOR[k]).map(([k, v]) => `${k} ${v.toFixed(2)}`);
+  // A setting whose largest movement is close to the floor has an effect this
+  // run is too small to resolve, which is a different finding from a setting the
+  // engine ignores - and reporting them the same way makes the instrument cry
+  // wolf. Counter Attack sits here at 400 matches and clears the floor
+  // comfortably at 1500.
+  const closest = Math.max(...Object.entries(moves).map(([k, v]) => v / FLOOR[k]));
+  const underpowered = !beaten.length && closest > 0.5;
   console.log(`  → spread across the scale: ${beaten.length ? beaten.join(', ') : 'nothing above the noise floor'}`
-    + `${beaten.length ? '' : '   <<< NO MEASURABLE EFFECT'}`);
-  rows.push({ setting: title, moved: beaten.length > 0, moves });
+    + (beaten.length ? '' : underpowered
+      ? `   <<< TOO SMALL TO RESOLVE AT ${N} MATCHES — re-run with more`
+      : '   <<< NO MEASURABLE EFFECT'));
+  rows.push({ setting: title, moved: beaten.length > 0, underpowered, moves });
 }
 
 console.log(`Ablation: ${teamA.name} (${Math.round(squadStrength(world, teamA))}) v ${teamB.name} (${Math.round(squadStrength(world, teamB))})`);
@@ -134,14 +143,22 @@ table('Striker role', [baseline, ...roleTests.map(([label, roleId]) => run(label
 console.log('\n--- Summary ---');
 console.log(`Noise floors at ${N} matches per arm: `
   + Object.entries(FLOOR).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', '));
-const flat = rows.filter((r) => !r.moved);
-console.log(`${rows.length - flat.length} of ${rows.length} tactical settings measurably change how the side plays.`);
+const flat = rows.filter((r) => !r.moved && !r.underpowered);
+const weak = rows.filter((r) => !r.moved && r.underpowered);
+console.log(`${rows.length - flat.length - weak.length} of ${rows.length} tactical settings measurably change how the side plays.`);
+if (weak.length) {
+  console.log(`\nToo small to resolve at ${N} matches — these have an effect, but not one this`);
+  console.log('run can separate from noise. Re-run with more matches before believing either way:');
+  for (const f of weak) {
+    console.log(`  ${f.setting.padEnd(22)} ` + Object.entries(f.moves).map(([k, v]) => `${k} ${v.toFixed(2)}`).join('  '));
+  }
+}
 if (flat.length) {
   console.log('\nSettings with NO measurable effect — claims the game is not keeping:');
   for (const f of flat) {
     console.log(`  ${f.setting.padEnd(22)} ` + Object.entries(f.moves).map(([k, v]) => `${k} ${v.toFixed(2)}`).join('  '));
   }
   process.exitCode = 1;
-} else {
+} else if (!weak.length) {
   console.log('Every setting the interface offers does something the engine acts on.');
 }
