@@ -239,6 +239,10 @@ export function scheduleContinental(game, comp, entrants) {
   });
   comp.knockoutDays = [[215, 229], [250, 264], [285, 299], [KEY_DAYS.seasonEnd + 13]];
   comp.stage = 'group';
+  // Record the group fixtures the same way each knockout round records its own.
+  // Without this the daily group-table update has to scan every fixture in the
+  // world to find the forty it cares about.
+  comp.groupFixtureIds = fixtures.map((f) => f.id);
   return fixtures;
 }
 

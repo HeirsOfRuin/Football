@@ -5,6 +5,7 @@ import { currentAbility, abilityForPosition, positionEffectiveness } from '../da
 import { estimateValue, estimateWage } from '../gen/playergen.js';
 import { squadDepth } from './lineup.js';
 import { weeklyWageBill } from './finance.js';
+import { abilityForReputation } from '../data/nations.js';
 import { expectedRole } from './training.js';
 
 /**
@@ -196,7 +197,7 @@ function assignFreeNumber(world, club, player) {
  */
 export function identifyNeed(world, club) {
   const depth = squadDepth(world, club);
-  const targetLevel = remap(club.rep, 20, 99, 52, 156);
+  const targetLevel = abilityForReputation(club.rep);
   const needs = [];
   const required = { GK: 2, DC: 3, DL: 2, DR: 2, DM: 2, MC: 3, ML: 1, MR: 1, AML: 1, AMR: 1, AMC: 1, ST: 2 };
   for (const pos in required) {
@@ -209,10 +210,78 @@ export function identifyNeed(world, club) {
   return sortBy(needs, { key: (n) => n.score, desc: true });
 }
 
-function affordable(world, club, player, fee) {
-  const wageRoom = club.finances.wageBudgetAnnual / 52 - weeklyWageBill(world, club);
+function affordable(world, club, player, fee, wageRoom) {
   const demand = contractDemand(world, player, club);
   return fee <= club.finances.transferBudget && demand.wage <= wageRoom * 0.92;
+}
+
+/**
+ * Ability-banded index of everyone who could plausibly move, rebuilt once a
+ * day. The AI used to allocate an array of every player in the world on every
+ * single attempt, sample 650 of them, and then throw almost all of them away on
+ * an ability test it could have made before looking. Banding by ability means a
+ * club only ever sees players somewhere near its own level, which is both far
+ * cheaper and the reason an amateur side no longer window-shops in the top
+ * flight.
+ */
+const BAND_SIZE = 12;
+
+function transferIndex(game) {
+  const world = game.world;
+  const cached = game._transferIndex;
+  // Keyed on the user's club too: it is baked into the index below, and a
+  // takeover mid-day would otherwise leave the new user club's players on the
+  // market for the rest of it.
+  if (cached && cached.day === game.day && cached.season === game.season
+      && cached.userClubId === game.userClubId) return cached;
+  const bands = new Map();
+  for (const id in world.players) {
+    const p = world.players[id];
+    if (!p) continue;
+    if (p.contract?.loanedFrom) continue;
+    if (p.clubId && world.clubs[p.clubId]?.isUserClub) continue; // the user handles their own sales
+    const b = Math.floor(currentAbility(p) / BAND_SIZE);
+    const list = bands.get(b);
+    if (list) list.push(p);
+    else bands.set(b, [p]);
+  }
+  const idx = { day: game.day, season: game.season, userClubId: game.userClubId, bands };
+  game._transferIndex = idx;
+  return idx;
+}
+
+/**
+ * Sample players around a club's level. The window is deliberately wider than
+ * the ability test that follows: the index bands on a player's ability in his
+ * natural position, while the caller tests his ability in the position actually
+ * being filled, and the two differ. Sampling walks the bands by offset rather
+ * than concatenating them, because at the bottom of the pyramid the window
+ * holds most of the world and concatenating would reintroduce the allocation
+ * this exists to avoid.
+ */
+function sampleNearLevel(game, targetLevel, rng, want) {
+  const { bands } = transferIndex(game);
+  const lo = Math.floor((targetLevel - 42) / BAND_SIZE);
+  const hi = Math.floor((targetLevel + 30) / BAND_SIZE);
+  const lists = [];
+  let total = 0;
+  for (let b = lo; b <= hi; b++) {
+    const list = bands.get(b);
+    if (!list || !list.length) continue;
+    lists.push(list);
+    total += list.length;
+  }
+  if (!total) return [];
+  const out = [];
+  const n = Math.min(total, want);
+  for (let i = 0; i < n; i++) {
+    let k = rng.int(0, total - 1);
+    for (const list of lists) {
+      if (k < list.length) { out.push(list[k]); break; }
+      k -= list.length;
+    }
+  }
+  return out;
 }
 
 /** How the buying club would rank a signing inside its own squad. */
@@ -235,14 +304,14 @@ export function aiTransferAttempt(game, club, rng) {
   const need = rng.weighted(top, (n) => n.score);
   const targetLevel = need.targetLevel;
 
+  // Computed once: it depends on the buying club, not on the player being
+  // looked at, and recomputing it per candidate walked the whole squad 650
+  // times an attempt.
+  const wageRoom = club.finances.wageBudgetAnnual / 52 - weeklyWageBill(world, club);
+
   const candidates = [];
-  const pool = Object.values(world.players);
-  const sampleSize = Math.min(pool.length, 650);
-  for (let i = 0; i < sampleSize; i++) {
-    const p = pool[rng.int(0, pool.length - 1)];
-    if (!p || p.clubId === club.id) continue;
-    if (p.contract?.loanedFrom) continue;
-    if (p.clubId && world.clubs[p.clubId]?.isUserClub) continue; // the user handles their own sales
+  for (const p of sampleNearLevel(game, targetLevel, rng, 260)) {
+    if (p.clubId === club.id) continue;
     if (positionEffectiveness(p, need.pos) < 0.88) continue;
     const ability = abilityForPosition(p.attrs, need.pos);
     // Must improve the position, or add depth behind a thin first choice.
@@ -250,7 +319,7 @@ export function aiTransferAttempt(game, club, rng) {
     if (!improves) continue;
     if (ability > targetLevel + 24) continue;
     const fee = p.clubId ? askingPrice(world, p) : 0;
-    if (!affordable(world, club, p, fee)) continue;
+    if (!affordable(world, club, p, fee, wageRoom)) continue;
     candidates.push({ p, ability, fee });
   }
   if (!candidates.length) return null;

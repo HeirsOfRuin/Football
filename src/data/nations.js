@@ -141,30 +141,136 @@ export const NATION_BY_ID = Object.fromEntries(NATIONS.map((n) => [n.id, n]));
  * League pyramids. `tier` 1 is the top flight. `rep` drives club quality,
  * finances and the ability ceiling of generated players.
  */
+/**
+ * League pyramids. `tier` 1 is the top flight. `rep` drives club quality,
+ * finances and the ability ceiling of generated players.
+ *
+ * Below tier 3 the game changes character: clubs are part-time or amateur,
+ * squads are smaller, wages are weekly pocket money and there is essentially
+ * no commercial income. `status` is what makes that concrete — see CLUB_STATUS.
+ */
 export const LEAGUE_TEMPLATES = [
+  // --- Albion: the full pyramid, professional down to amateur ---
   { id: 'ALB1', nation: 'ALB', tier: 1, name: 'Albion Premier League', teams: 20, rep: 95, promoted: 0, relegated: 3, tvMoney: 110e6, prize: 2.4e6 },
   { id: 'ALB2', nation: 'ALB', tier: 2, name: 'Albion Championship', teams: 22, rep: 74, promoted: 3, relegated: 3, tvMoney: 9e6, prize: 0.35e6 },
-  { id: 'ALB3', nation: 'ALB', tier: 3, name: 'Albion League One', teams: 20, rep: 56, promoted: 3, relegated: 3, tvMoney: 1.6e6, prize: 0.09e6 },
+  { id: 'ALB3', nation: 'ALB', tier: 3, name: 'Albion League One', teams: 20, rep: 50, promoted: 3, relegated: 4, tvMoney: 1.6e6, prize: 0.09e6 },
+  { id: 'ALB4', nation: 'ALB', tier: 4, name: 'Albion National League', teams: 20, rep: 31, promoted: 3, relegated: 4, tvMoney: 0.22e6, prize: 0.018e6 },
+  { id: 'ALB5', nation: 'ALB', tier: 5, name: 'Albion Regional Premier', teams: 18, rep: 17, promoted: 3, relegated: 0, tvMoney: 0.02e6, prize: 0.004e6 },
+
+  // --- The other major nations: professional down to semi-professional ---
   { id: 'CAS1', nation: 'CAS', tier: 1, name: 'Castilian Primera', teams: 20, rep: 93, promoted: 0, relegated: 3, tvMoney: 72e6, prize: 2.0e6 },
   { id: 'CAS2', nation: 'CAS', tier: 2, name: 'Castilian Segunda', teams: 22, rep: 68, promoted: 3, relegated: 4, tvMoney: 6e6, prize: 0.25e6 },
+  { id: 'CAS3', nation: 'CAS', tier: 3, name: 'Castilian Primera Federación', teams: 20, rep: 39, promoted: 3, relegated: 0, tvMoney: 0.5e6, prize: 0.04e6 },
   { id: 'LOM1', nation: 'LOM', tier: 1, name: 'Lombard Serie Prima', teams: 20, rep: 90, promoted: 0, relegated: 3, tvMoney: 62e6, prize: 1.8e6 },
   { id: 'LOM2', nation: 'LOM', tier: 2, name: 'Lombard Serie Seconda', teams: 20, rep: 66, promoted: 3, relegated: 4, tvMoney: 5e6, prize: 0.22e6 },
+  { id: 'LOM3', nation: 'LOM', tier: 3, name: 'Lombard Serie Terza', teams: 18, rep: 37, promoted: 3, relegated: 0, tvMoney: 0.4e6, prize: 0.035e6 },
   { id: 'ALE1', nation: 'ALE', tier: 1, name: 'Alemann Bundesliga', teams: 18, rep: 91, promoted: 0, relegated: 3, tvMoney: 68e6, prize: 1.9e6 },
   { id: 'ALE2', nation: 'ALE', tier: 2, name: 'Alemann 2. Liga', teams: 18, rep: 69, promoted: 3, relegated: 3, tvMoney: 7e6, prize: 0.28e6 },
+  { id: 'ALE3', nation: 'ALE', tier: 3, name: 'Alemann 3. Liga', teams: 18, rep: 41, promoted: 3, relegated: 0, tvMoney: 0.8e6, prize: 0.05e6 },
   { id: 'GAL1', nation: 'GAL', tier: 1, name: 'Gallian Ligue Première', teams: 18, rep: 87, promoted: 0, relegated: 3, tvMoney: 48e6, prize: 1.5e6 },
   { id: 'GAL2', nation: 'GAL', tier: 2, name: 'Gallian Ligue Deux', teams: 20, rep: 62, promoted: 3, relegated: 4, tvMoney: 4e6, prize: 0.18e6 },
+  { id: 'GAL3', nation: 'GAL', tier: 3, name: 'Gallian National', teams: 18, rep: 35, promoted: 3, relegated: 0, tvMoney: 0.35e6, prize: 0.03e6 },
+
+  // --- Smaller nations: a top flight and one division beneath it ---
   { id: 'BAT1', nation: 'BAT', tier: 1, name: 'Batavian Eredivisie', teams: 18, rep: 80, promoted: 0, relegated: 2, tvMoney: 22e6, prize: 0.9e6 },
+  { id: 'BAT2', nation: 'BAT', tier: 2, name: 'Batavian Eerste Divisie', teams: 16, rep: 46, promoted: 2, relegated: 0, tvMoney: 1.2e6, prize: 0.07e6 },
   { id: 'LUS1', nation: 'LUS', tier: 1, name: 'Lusitanian Liga', teams: 18, rep: 82, promoted: 0, relegated: 2, tvMoney: 24e6, prize: 1.0e6 },
+  { id: 'LUS2', nation: 'LUS', tier: 2, name: 'Lusitanian Liga Dois', teams: 16, rep: 45, promoted: 2, relegated: 0, tvMoney: 1.0e6, prize: 0.06e6 },
   { id: 'NOR1', nation: 'NOR', tier: 1, name: 'Nordheim Eliteserien', teams: 16, rep: 68, promoted: 0, relegated: 2, tvMoney: 7e6, prize: 0.3e6 },
+  { id: 'NOR2', nation: 'NOR', tier: 2, name: 'Nordheim Førstedivisjon', teams: 14, rep: 39, promoted: 2, relegated: 0, tvMoney: 0.5e6, prize: 0.03e6 },
   { id: 'PLA1', nation: 'PLA', tier: 1, name: 'Platina Primera División', teams: 20, rep: 79, promoted: 0, relegated: 2, tvMoney: 14e6, prize: 0.6e6 },
+  { id: 'PLA2', nation: 'PLA', tier: 2, name: 'Platina Primera Nacional', teams: 18, rep: 44, promoted: 2, relegated: 0, tvMoney: 0.7e6, prize: 0.045e6 },
   { id: 'VER1', nation: 'VER', tier: 1, name: 'Verdenian Série A', teams: 20, rep: 84, promoted: 0, relegated: 4, tvMoney: 18e6, prize: 0.8e6 },
+  { id: 'VER2', nation: 'VER', tier: 2, name: 'Verdenian Série B', teams: 18, rep: 48, promoted: 4, relegated: 0, tvMoney: 1.4e6, prize: 0.08e6 },
 ];
 
-/** World size presets — trading depth for save size and simulation speed. */
+/**
+ * What kind of club this is, derived from its reputation. This is the field
+ * that makes the bottom of the pyramid a different job rather than a smaller
+ * version of the same one: it sets squad size, how hard players can train,
+ * how long they will sign for, and whether wages are a career or a supplement.
+ */
+export const CLUB_STATUS = {
+  professional: {
+    id: 'professional', label: 'Professional', minRep: 50,
+    squadSize: 26, trainingMult: 1.0, contractYears: [1, 4], wageMult: 1.0,
+  },
+  'part-time': {
+    id: 'part-time', label: 'Part-time', minRep: 30,
+    squadSize: 21, trainingMult: 0.72, contractYears: [1, 2], wageMult: 0.5,
+  },
+  amateur: {
+    id: 'amateur', label: 'Amateur', minRep: 0,
+    squadSize: 18, trainingMult: 0.5, contractYears: [1, 1], wageMult: 0.16,
+  },
+};
+
+/**
+ * Squad ability from club reputation.
+ *
+ * This was a straight line from 52 to 156, which gave the whole world a 2.1x
+ * ability range against a 22x money range — a bottom-division club was a poor
+ * top-flight club rather than a different kind of football. A power curve keeps
+ * the top where it was (match calibration depends on it) and stretches the
+ * bottom into genuinely amateur territory.
+ *
+ * It lives here, beside the league templates, because four separate modules
+ * need it and three of them used to carry their own copy.
+ */
+export function abilityForReputation(rep) {
+  // The original curve was a straight line from reputation 20 upward, clamped
+  // flat below it — which is precisely why the bottom of the pyramid was a rich
+  // second tier: a village side on reputation 8 and a lower-league club on 20
+  // were handed identical squads. Extending the same line downward is the whole
+  // fix. It leaves every division that already existed exactly where the match
+  // engine was calibrated against it and only changes the tiers underneath.
+  //
+  // A power curve was tried first and rejected: it lifted the middle of the
+  // pyramid by ten to fourteen points, which moved goals per match +4% and draws
+  // -16% in the top flight. Stretching the bottom must not mean inflating the
+  // middle.
+  return Math.max(20, Math.min(158, 52 + (rep - 20) * (104 / 79)));
+}
+
+/**
+ * Annual commercial and sponsorship income. Steep and normalised on reputation,
+ * so the money range across the pyramid is as wide as real football's: a giant
+ * earns nine figures, a village side earns beer money. The old curve still paid
+ * an amateur club eight million a year.
+ */
+export function commercialIncome(rep, wealth = 1) {
+  const t = Math.max(0, Math.min(1, (rep - 8) / 91));
+  return Math.pow(t, 4.2) * 205e6 * wealth + 12e3;
+}
+
+export function statusForRep(rep) {
+  if (rep >= CLUB_STATUS.professional.minRep) return CLUB_STATUS.professional;
+  if (rep >= CLUB_STATUS['part-time'].minRep) return CLUB_STATUS['part-time'];
+  return CLUB_STATUS.amateur;
+}
+
+/**
+ * World size presets. These now trade breadth against depth rather than just
+ * adding nations: a small world goes all the way down to amateur football, a
+ * large one covers every nation but only the divisions near the top. That
+ * keeps the simulation cost roughly level across the three choices.
+ */
 export const WORLD_SIZES = {
-  small: { label: 'Small (3 nations)', nations: ['ALB', 'CAS', 'ALE'] },
-  medium: { label: 'Medium (6 nations)', nations: ['ALB', 'CAS', 'LOM', 'ALE', 'GAL', 'BAT'] },
-  large: { label: 'Large (all 10 nations)', nations: NATIONS.map((n) => n.id) },
+  small: {
+    label: 'Small — 3 nations, full pyramid',
+    hint: 'Fewest nations, but every division down to amateur. Best for starting at the bottom.',
+    nations: ['ALB', 'CAS', 'ALE'], maxTier: 5,
+  },
+  medium: {
+    label: 'Medium — 6 nations, down to tier 3',
+    hint: 'A broader world with semi-professional football beneath each top flight.',
+    nations: ['ALB', 'CAS', 'LOM', 'ALE', 'GAL', 'BAT'], maxTier: 3,
+  },
+  large: {
+    label: 'Large — 10 nations, top two tiers',
+    hint: 'Every nation in the game, but only the divisions near the top of each.',
+    nations: NATIONS.map((n) => n.id), maxTier: 2,
+  },
 };
 
 export const CONTINENTAL = {

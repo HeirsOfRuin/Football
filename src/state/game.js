@@ -4,6 +4,7 @@ import { Rng, subRng } from '../core/rng.js';
 import { clamp, remap, sortBy, money } from '../core/util.js';
 import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, dayToDate } from '../core/calendar.js';
 import { generateWorld, squadStrength } from '../gen/worldgen.js';
+import { abilityForReputation } from '../data/nations.js';
 import { generatePlayer, emptyStats, estimateValue } from '../gen/playergen.js';
 import { currentAbility } from '../data/attributes.js';
 import { beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
@@ -689,7 +690,15 @@ function advanceCup(game, comp, rng) {
 function advanceContinental(game, comp, rng) {
   if (!comp.groups?.length) return;
   if (comp.stage === 'group') {
-    const groupFixtures = Object.values(game.fixtures).filter((f) => f.comp === comp.id && !f.knockout);
+    // Scanning every fixture in the world here, once a day per competition, was
+    // the single most expensive thing in a season once the pyramid grew: over a
+    // fifth of the total. Saves drawn before the ids were recorded rebuild them
+    // once, so no migration is needed.
+    if (!comp.groupFixtureIds) {
+      comp.groupFixtureIds = Object.values(game.fixtures)
+        .filter((f) => f.comp === comp.id && !f.knockout).map((f) => f.id);
+    }
+    const groupFixtures = comp.groupFixtureIds.map((id) => game.fixtures[id]).filter(Boolean);
     // Keep group tables current.
     for (const f of groupFixtures) {
       if (!f.played || f.counted) continue;
@@ -723,7 +732,7 @@ function advanceContinental(game, comp, rng) {
   const winners = [];
   for (const tie of round.ties) {
     const w = round.twoLegged
-      ? resolveTie(game, comp, tie, Object.values(game.fixtures))
+      ? resolveTie(game, comp, tie, fixtures)
       : (() => {
         const f = fixtures.find((x) => x.tieId === tie.id);
         if (!f) return tie.home;
@@ -1006,7 +1015,7 @@ export function rolloverSeason(game) {
       // Centred on the squad quality curve a club is generated with. Filling
       // gaps with players below that band erodes every division a little each
       // season, and eight seasons of it makes the whole world visibly worse.
-      const targetCA = clamp(Math.round(remap(club.rep, 20, 99, 52, 156) * rng.range(0.72, 1.0)), 25, 180);
+      const targetCA = clamp(Math.round(abilityForReputation(club.rep) * rng.range(0.72, 1.0)), 18, 180);
       const p = generatePlayer(rng, {
         nationId: rng.chance(0.75) ? club.nation : rng.pick(world.nations).id,
         pos, age, targetCA, targetPA: clamp(targetCA + rng.int(0, 30), targetCA, 195),

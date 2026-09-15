@@ -1,6 +1,7 @@
 // Club finances: gate receipts, commercial income, wages, prize money.
 
 import { clamp, remap } from '../core/util.js';
+import { commercialIncome } from '../data/nations.js';
 
 export function ledgerEntry(club, day, label, amount, category) {
   club.finances.balance += amount;
@@ -29,7 +30,7 @@ export function applyMatchdayIncome(game, club, opponent, attendance, comp) {
 /** Monthly commercial and sponsorship income. */
 export function applyMonthlyIncome(game, club) {
   const nation = game.world.nations.find((n) => n.id === club.nation);
-  const commercial = Math.pow(club.rep / 95, 3.2) * 190e6 * (nation?.wealth ?? 0.7) / 12 + 33e3;
+  const commercial = commercialIncome(club.rep, nation?.wealth ?? 0.7) / 12;
   const success = club.lastFinish ? remap(club.lastFinish, 1, 20, 1.18, 0.88) : 1;
   ledgerEntry(club, game.day, 'Sponsorship & commercial', Math.round(commercial * success), 'commercial');
   const upkeep = -(club.stadium.capacity * 2.4 + club.facilities.training * 26000 + club.facilities.youth * 17000
@@ -92,7 +93,7 @@ export function setSeasonBudgets(game, club, rng) {
   const capacity = club.stadium.capacity;
   const matchday = capacity * club.finances.capacityUse * club.finances.ticketPrice * 1.38 * (league.teams - 1);
   const tv = league ? league.tvMoney / league.teams + league.prize * (league.teams / 2) : 2e6;
-  const commercial = Math.pow(club.rep / 95, 3.2) * 190e6 * (nation?.wealth ?? 0.7) + 400e3;
+  const commercial = commercialIncome(club.rep, nation?.wealth ?? 0.7);
   const projected = matchday + tv + commercial;
   club.finances.incomeEstimate = Math.round(projected);
 
