@@ -19,6 +19,7 @@ import * as leagueScreen from './screens/league.js';
 import * as transfersScreen from './screens/transfers.js';
 import * as financesScreen from './screens/finances.js';
 import * as clubScreen from './screens/club.js';
+import * as careerScreen from './screens/career.js';
 import * as worldScreen from './screens/world.js';
 import * as inboxScreen from './screens/inbox.js';
 import * as matchScreen from './screens/match.js';
@@ -36,6 +37,7 @@ const SCREENS = {
   transfers: transfersScreen,
   finances: financesScreen,
   club: clubScreen,
+  career: careerScreen,
   world: worldScreen,
   inbox: inboxScreen,
   match: matchScreen,
@@ -53,6 +55,7 @@ const NAV = [
   { id: 'squads', label: 'Squads' },
   { id: 'training', label: 'Training' },
   { id: 'club', label: 'Club' },
+  { id: 'career', label: 'Career' },
   { sep: true },
   { id: 'fixtures', label: 'Fixtures' },
   { id: 'league', label: 'Competitions' },

@@ -10,7 +10,6 @@ const VIEWS = [
   { id: 'overview', label: 'Overview' },
   { id: 'staff', label: 'Staff & Facilities' },
   { id: 'history', label: 'History' },
-  { id: 'manager', label: 'Manager' },
 ];
 
 const FACILITY_LABELS = [
@@ -34,7 +33,6 @@ export function render(app) {
   let body;
   if (state.view === 'staff') body = staffView(club);
   else if (state.view === 'history') body = historyView(club);
-  else if (state.view === 'manager') body = managerView(app, game);
   else body = overviewView(app, club, league);
 
   return {
@@ -181,30 +179,3 @@ function historyView(club) {
         <td>${esc(h.achievement)}</td></tr>`).join('')}</tbody></table>`);
 }
 
-function managerView(app, game) {
-  const m = game.manager;
-  const played = m.matches || 0;
-  const winPct = played ? ((m.wins / played) * 100).toFixed(1) : '0.0';
-  return `<div class="grid c2">
-    ${panel('Record', kv([
-    ['Name', m.name],
-    ['Reputation', String(Math.round(m.reputation))],
-    ['Matches', String(played)],
-    ['Won / Drawn / Lost', `${m.wins} / ${m.draws} / ${m.losses}`],
-    ['Win rate', `${winPct}%`],
-    ['Trophies', String(m.trophies.length)],
-  ]))}
-    ${panelTight('Trophy Cabinet', m.trophies.length === 0 ? emptyState('Nothing won yet.')
-    : `<table><tbody>${[...m.trophies].reverse().map((t) => `<tr>
-      <td class="mono small">${t.year}/${String(t.year + 1).slice(2)}</td>
-      <td>${esc(t.name)}</td><td class="small faint">${esc(t.club)}</td></tr>`).join('')}</tbody></table>`)}
-    ${panelTight('Seasons', m.history.length === 0 ? emptyState('No completed seasons.')
-    : `<table><thead><tr><th>Season</th><th>Club</th><th>Division</th><th class="num">Pos</th>
-      <th class="num">W</th><th class="num">D</th><th class="num">L</th></tr></thead><tbody>
-      ${[...m.history].reverse().map((h) => `<tr>
-        <td class="mono small">${h.year}/${String(h.year + 1).slice(2)}</td>
-        <td class="small">${esc(h.club)}</td><td class="small faint">${esc(h.league || '')}</td>
-        <td class="num">${h.position ?? '—'}</td><td class="num">${h.w}</td><td class="num">${h.d}</td><td class="num">${h.l}</td>
-      </tr>`).join('')}</tbody></table>`)}
-  </div>`;
-}

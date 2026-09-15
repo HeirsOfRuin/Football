@@ -212,6 +212,7 @@ export function serialiseGame(game) {
       clubs,
       freeAgents: world.freeAgents,
       competitions: world.competitions,
+      hallOfFame: world.hallOfFame || [],
     },
     players,
   };
@@ -300,6 +301,23 @@ export function migrateSave(data) {
   if (version < 8 && data.game && !data.game.vacancies) {
     data.game.vacancies = [];
   }
+  // v8 -> v9: the career record. An older save keeps the seasons it has, gains
+  // the spells and notable players it never collected, and starts a hall of
+  // fame from the next retirement - the ones already deleted are gone.
+  if (version < 9) {
+    if (data.game?.manager) {
+      const m = data.game.manager;
+      m.season = m.season || { matches: 0, wins: 0, draws: 0, losses: 0 };
+      m.notable = m.notable || [];
+      m.spells = m.spells || [];
+      m.history = m.history || [];
+      // The trophies it already has were cups and leagues; nothing else could
+      // produce one before this version.
+      m.trophies = (m.trophies || []).map((t) => ({ kind: t.kind || 'cup', ...t }));
+      m.departuresSeen = m.departuresSeen ?? (data.game.transferLog?.length || 0);
+    }
+    if (data.world) data.world.hallOfFame = data.world.hallOfFame || [];
+  }
   // Loans exist now, so every club needs somewhere to record who it has lent
   // out - the parent's half of a split wage is charged off that list.
   if (version < 7 && data.world?.clubs) {
@@ -343,6 +361,7 @@ export function deserialiseGame(raw) {
     players: {},
     freeAgents: data.world.freeAgents,
     competitions: data.world.competitions,
+    hallOfFame: data.world.hallOfFame || [],
   };
   for (const packed of data.players) {
     const p = unpackPlayer(packed);

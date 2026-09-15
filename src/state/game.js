@@ -21,6 +21,10 @@ import {
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, completeLoan, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
 import { interviewOutcome, ambitionShift } from '../data/interview.js';
+import {
+  emptyCareer, recordMatchResult, recordSeason, resetSeasonRecord, addHonour,
+  trackNotable, noteDeparture, retirePlayer, beginSpell, endSpell,
+} from './career.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { pruneNegotiations } from '../engine/negotiation.js';
 import { news, matchHeadline } from '../engine/news.js';
@@ -28,7 +32,7 @@ import { news, matchHeadline } from '../engine/news.js';
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 8;
+export const GAME_VERSION = 9;
 
 export function newGame(opts = {}) {
   const {
@@ -46,14 +50,7 @@ export function newGame(opts = {}) {
     season: 1,
     day: 0,
     userClubId: clubId,
-    manager: {
-      name: managerName,
-      nat: managerNat,
-      reputation: 25,
-      history: [],
-      trophies: [],
-      matches: 0, wins: 0, draws: 0, losses: 0,
-    },
+    manager: { name: managerName, nat: managerNat, reputation: 25, ...emptyCareer() },
     fixtures: {},
     fixturesByDay: {},
     inbox: [],
@@ -79,6 +76,7 @@ export function newGame(opts = {}) {
     // point, and without it a manager who never changed club had no contract at
     // all - so dismissal cost the club nothing.
     game.manager.contract = managerContract(club, world.year);
+    beginSpell(game, club);
   }
 
   startSeason(game, true);
@@ -135,6 +133,7 @@ export function takeOverClub(game, clubId, managerName, managerNat, answers = nu
 
   // Taking the job closes the vacancy, and the caretaker steps aside.
   game.vacancies = (game.vacancies || []).filter((v) => v.clubId !== clubId);
+  beginSpell(game, club);
 
   const league = world.leagues.find((l) => l.id === club.leagueId);
   news(game, 'media', 'Welcome to the hot seat',
@@ -246,6 +245,12 @@ export function startSeason(game, isFirst = false) {
     }
   }
 
+  resetSeasonRecord(game.manager);
+  // Anyone tracked who moved since the last check now has somewhere to have
+  // gone. The watermark matters: the transfer log grows for the life of the
+  // save, and rescanning it from zero every season is a cost that compounds.
+  noteUserDepartures(game, game.manager.departuresSeen || 0);
+  game.manager.departuresSeen = game.transferLog.length;
   for (const p of Object.values(world.players)) {
     p.season = emptyStats();
     p.yellowCards = 0;
@@ -397,12 +402,9 @@ export function finishFixture(game, fixture, state) {
 
   const userId = game.userClubId;
   if (fixture.homeId === userId || fixture.awayId === userId) {
-    game.manager.matches++;
     const isHome = fixture.homeId === userId;
     const res = isHome ? outcome[0] : outcome[1];
-    if (res === 'W') game.manager.wins++;
-    else if (res === 'D') game.manager.draws++;
-    else game.manager.losses++;
+    recordMatchResult(game.manager, res);
     reportUserMatch(game, fixture, state, isHome, isHome ? bansHome : bansAway);
   }
 
@@ -714,6 +716,23 @@ function runTransferDay(game, rng) {
  * about: marquee moves, business inside their own division, and anyone they
  * were tracking themselves. Reporting every deal buries the inbox.
  */
+/**
+ * A player who played for you leaving, recorded on the career page.
+ *
+ * Hooked here rather than inside completeTransfer because the engine has no
+ * business knowing about the manager's scrapbook, and the transfer log is
+ * already the one place every completed move passes through.
+ */
+function noteUserDepartures(game, sinceIndex) {
+  const world = game.world;
+  for (let i = sinceIndex; i < game.transferLog.length; i++) {
+    const t = game.transferLog[i];
+    const p = world.players[t.playerId];
+    if (!p) continue;
+    noteDeparture(game, p, t.loan ? `On loan at ${t.to}` : t.to);
+  }
+}
+
 function reportTransfer(game, deal) {
   const user = userClub(game);
   if (!user) return;
@@ -1145,7 +1164,7 @@ function announceTrophy(game, comp, clubId) {
   news(game, 'competition', `${club.name} win the ${comp.name}`,
     `${club.name} have lifted the ${comp.name}.`);
   if (clubId === game.userClubId) {
-    game.manager.trophies.push({ season: game.season, year: game.world.year, name: comp.name, club: club.name });
+    addHonour(game, { kind: 'cup', name: comp.name, club: club.name });
     news(game, 'board', `Champions: ${comp.name}`, 'The board and supporters are ecstatic. A trophy for the cabinet.');
     club.board.confidence = clamp(club.board.confidence + 22, 0, 100);
   }
@@ -1180,7 +1199,7 @@ export function endSeason(game) {
       if (champ) {
         champ.history.push({ season: game.season, year: world.year, achievement: `Won the ${league.name}` });
         if (champ.id === game.userClubId) {
-          game.manager.trophies.push({ season: game.season, year: world.year, name: league.name, club: champ.name });
+          addHonour(game, { kind: 'league', name: league.name, club: champ.name });
         }
       }
     }
@@ -1223,11 +1242,8 @@ export function endSeason(game) {
       summary.sackedFrom = user.name;
       summary.compensation = dismissalCompensation(game);
     }
-    game.manager.history.push({
-      season: game.season, year: world.year, club: user.name,
-      league: league?.name, position: user.lastFinish,
-      w: user.seasonRecord?.w ?? 0, d: user.seasonRecord?.d ?? 0, l: user.seasonRecord?.l ?? 0,
-    });
+    recordSeason(game, user, league);
+    trackNotable(game, user);
     game.manager.reputation = clamp(game.manager.reputation + (verdict.tone === 'delighted' ? 8 : verdict.tone === 'pleased' ? 4 : verdict.tone === 'satisfied' ? 1 : -5), 1, 100);
     news(game, 'board', 'End of season review', verdict.text);
   }
@@ -1309,6 +1325,10 @@ function applyPromotionRelegation(game, summary, rng) {
         upper.clubIds.push(id);
         summary.promoted.push({ clubId: id, from: lower.name, to: upper.name });
         c.history.push({ season: game.season, year: world.year, achievement: `Promoted to ${upper.name}` });
+        // A career built in the lower divisions is built on these. They were
+        // free text on the club and nothing else, so a manager who had gone up
+        // four times had an empty trophy cabinet.
+        if (c.isUserClub) addHonour(game, { kind: 'promotion', name: `Promotion to ${upper.name}`, club: c.name });
       }
     }
     enforceReserveSeparation(game, ordered, summary);
@@ -1383,7 +1403,12 @@ function resolvePlayoff(game, poolIds, rng) {
     remaining = next;
   }
   const winner = world.clubs[remaining[0]];
-  if (winner) winner.history.push({ season: game.season, year: world.year, achievement: 'Won the promotion play-offs' });
+  if (winner) {
+    winner.history.push({ season: game.season, year: world.year, achievement: 'Won the promotion play-offs' });
+    if (winner.isUserClub) {
+      addHonour(game, { kind: 'playoff', name: `${league.name} play-offs`, club: winner.name });
+    }
+  }
   return remaining[0];
 }
 
@@ -1414,6 +1439,7 @@ export function sackManager(game) {
     ledgerEntry(club, game.day, 'Manager compensation', -payoff, 'wages');
     game.manager.severance = (game.manager.severance || 0) + payoff;
   }
+  endSpell(game, 'sacked');
   game.userClubId = null;
   game.manager.contract = null;
   game.manager.reputation = clamp(game.manager.reputation - 8, 1, 100);
@@ -1598,8 +1624,15 @@ export function rolloverSeason(game) {
     const lowLevel = ca < 45 && p.age >= 30 ? 0.4 : 0;
     if (rng.chance(Math.max(retireChance, lowLevel))) {
       retirements.push(p);
+      // Before the delete, not after: everything worth keeping about him is on
+      // the object that is about to stop existing.
+      retirePlayer(game, p);
       const club = p.clubId ? world.clubs[p.clubId] : null;
-      if (club) club.squad = club.squad.filter((x) => x !== p.id);
+      if (club) {
+        club.squad = club.squad.filter((x) => x !== p.id);
+        if (club.youthSquad) club.youthSquad = club.youthSquad.filter((x) => x !== p.id);
+        if (club.loanedOut) club.loanedOut = club.loanedOut.filter((x) => x !== p.id);
+      }
       world.freeAgents = world.freeAgents.filter((x) => x !== p.id);
       delete world.players[p.id];
       continue;

@@ -18,6 +18,24 @@ cd Football
 python3 -m http.server 8080     # or: npx serve, or any static server
 ```
 
+### Installing it
+
+Touchline is a progressive web app: a manifest, an icon set and a service worker that
+caches the whole module graph on the first visit. Once it has been opened once over
+HTTPS it runs with no network at all — worlds generate, seasons play, saves persist.
+
+- **Android / desktop Chrome, Edge:** an install prompt appears in the address bar, or
+  use the browser menu's "Install app".
+- **iPhone / iPad:** Share → Add to Home Screen.
+- **Desktop Safari:** File → Add to Dock.
+
+Installed, it opens in its own window with no browser chrome and the same saves, which
+live in IndexedDB on that device.
+
+`npm run pwa` drives a real browser through all of that — manifest, worker, cache,
+and building a world with the network switched off. It needs Playwright, which the
+project deliberately does not depend on; it says so and exits cleanly if it is absent.
+
 Then open <http://localhost:8080>.
 
 Press **Space** to continue — it advances the calendar, and starts or pauses a match.

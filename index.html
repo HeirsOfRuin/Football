@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Touchline — Football Management</title>
+<meta name="theme-color" content="#0d1b14">
+<meta name="description" content="A deep football management simulation: build a club from the amateur leagues to the top flight.">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="stylesheet" href="styles/main.css">
+<!-- iOS does not read the manifest for these, so they are stated twice. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Touchline">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1b14'/><circle cx='16' cy='16' r='9' fill='none' stroke='%2338d07a' stroke-width='2.5'/><path d='M16 7v18M7 16h18' stroke='%2338d07a' stroke-width='1.5' opacity='.5'/></svg>">
 </head>
 <body>
@@ -12,6 +20,38 @@
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 <script type="module" src="src/ui/app.js"></script>
+<script>
+// Registration is best effort. A service worker needs a secure context and a
+// same-origin scope, and neither is guaranteed everywhere this is opened - off a
+// file:// path, or inside a sandboxed host. The game works without it; only
+// offline play and the install prompt depend on it, so a failure here must not
+// be allowed to stop the page loading.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { scope: './' }).then((reg) => {
+      // Hand the worker the list of everything this page actually fetched. On a
+      // first visit the worker is not controlling the page yet, so the module
+      // graph never passes through its fetch handler and would not be cached at
+      // all - measured, seven files instead of fifty. Doing it this way needs no
+      // hardcoded file list and no build step, and caches exactly what the app
+      // loaded rather than what someone remembered to list.
+      const send = () => {
+        const target = reg.active || navigator.serviceWorker.controller;
+        if (!target) return;
+        const urls = performance.getEntriesByType('resource')
+          .filter((e) => e.initiatorType !== 'beacon')
+          .map((e) => e.name)
+          .concat([location.href.split('#')[0]]);
+        target.postMessage({ type: 'cache-these', urls });
+      };
+      // Twice: once for what has loaded by now, once after the module graph and
+      // the first screen have settled.
+      send();
+      setTimeout(send, 4000);
+    }).catch(() => {});
+  });
+}
+</script>
 <noscript><p style="padding:2rem;font-family:sans-serif">Touchline needs JavaScript enabled.</p></noscript>
 </body>
 </html>

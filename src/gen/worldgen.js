@@ -380,6 +380,7 @@ export function generateWorld(opts = {}) {
     clubs: {},
     players: {},
     freeAgents: [],
+    hallOfFame: [],
     competitions: {},
   };
 

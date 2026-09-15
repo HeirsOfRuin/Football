@@ -31,6 +31,10 @@ import { registrationLimit, refreshRegistration, buildLineup as buildXI } from '
 import { wageBudgetUsage } from '../src/engine/finance.js';
 import { leagueObjective, cupObjective, remitObjective, objectiveScore, seasonObjectives } from '../src/data/objectives.js';
 import { INTERVIEW_QUESTIONS, interviewOutcome, ambitionShift, defaultAnswers } from '../src/data/interview.js';
+import {
+  careerTotals, recordMatchResult, recordSeason, addHonour, trackNotable,
+  noteDeparture, retirePlayer, endSpell,
+} from '../src/state/career.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 import {
   openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
@@ -771,6 +775,131 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('a negotiation survives a save', !!back7
     && back7.reserve === n7.reserve && back7.patience === n7.patience && back7.round === n7.round,
     back7 ? 'kept' : 'lost');
+}
+
+// --- The career record has to add up -----------------------------------------
+{
+  const gcx = newGame({ seed: 3131, size: 'small', managerName: 'Test', clubId: null });
+  const wcx = gcx.world;
+  const lowLeague = wcx.leagues.filter((l) => l.tier >= 3).sort((a, b) => b.tier - a.tier)[0];
+  takeOverClub(gcx, lowLeague.clubIds[0], 'Test', 'ALB');
+  const me = wcx.clubs[gcx.userClubId];
+
+  check('taking a job opens a spell', gcx.manager.spells.length === 1
+    && gcx.manager.spells[0].clubId === me.id && !gcx.manager.spells[0].endYear);
+
+  // The manager record is written in one place now, so a result counted for the
+  // lifetime and a result counted for the season are the same event.
+  recordMatchResult(gcx.manager, 'W');
+  recordMatchResult(gcx.manager, 'D');
+  recordMatchResult(gcx.manager, 'L');
+  recordMatchResult(gcx.manager, 'W');
+  check('a result counts once for the season and once for the career',
+    gcx.manager.matches === 4 && gcx.manager.season.matches === 4
+    && gcx.manager.wins === 2 && gcx.manager.season.wins === 2);
+
+  me.seasonRecord = { w: 9, d: 5, l: 4 };
+  me.lastFinish = 3;
+  const row = recordSeason(gcx, me, lowLeague);
+  check('a season row carries both records', row.w === 9 && row.allMatches === 4,
+    `league ${row.w}-${row.d}-${row.l}, all comps ${row.allMatches}`);
+  // The defect this replaces: the manager panel showed an all-competitions
+  // lifetime W/D/L directly above a season table of league-only W/D/L, with
+  // nothing saying they were different questions.
+  const tot = careerTotals(gcx.manager);
+  check('the two records are reported separately and both are right',
+    tot.all.matches === 4 && tot.league.matches === 18,
+    `all ${tot.all.matches}, league ${tot.league.matches}`);
+  check('the spell accumulates the season', gcx.manager.spells[0].seasons === 1
+    && gcx.manager.spells[0].matches === 4);
+
+  // Promotions are honours. They were free text on the club and nothing else,
+  // so a manager who had gone up four times had an empty trophy cabinet.
+  addHonour(gcx, { kind: 'promotion', name: 'Promotion to Albion League One', club: me.name });
+  addHonour(gcx, { kind: 'cup', name: 'Albion Cup', club: me.name });
+  const after = careerTotals(gcx.manager);
+  check('a promotion counts as an honour', after.honours === 2 && after.promotions === 1);
+  check('honours are attributed to the spell', gcx.manager.spells[0].trophies === 2);
+
+  // Players you managed are remembered, and where they went is recorded.
+  const keeper = wcx.players[me.squad[0]];
+  keeper.season.apps = 30;
+  keeper.season.goals = 2;
+  trackNotable(gcx, me);
+  const tracked = gcx.manager.notable.find((n) => n.playerId === keeper.id);
+  check('a player who played for you is remembered', !!tracked && tracked.apps === 30,
+    tracked ? `${tracked.name}, ${tracked.apps} apps` : 'not tracked');
+  check('somebody who barely played is not', gcx.manager.notable.length < me.squad.length,
+    `${gcx.manager.notable.length} of ${me.squad.length}`);
+  noteDeparture(gcx, keeper, 'Elsewhere FC');
+  check('where he went is recorded', tracked.wentTo === 'Elsewhere FC');
+
+  // Retirement keeps a summary. It used to delete the player outright, so a man
+  // you signed at seventeen and won a league with stopped having existed.
+  const veteran = wcx.players[me.squad[1]];
+  veteran.career = { apps: 420, goals: 61, assists: 30, cleanSheets: 0, motm: 12, seasons: [] };
+  veteran.age = 36;
+  trackNotable(gcx, me);
+  const entry = retirePlayer(gcx, veteran);
+  check('a retiring player leaves a record', !!entry && entry.apps === 420 && entry.goals === 61);
+  check('the record reaches the hall of fame',
+    wcx.hallOfFame.some((h) => h.id === veteran.id), `${wcx.hallOfFame.length} entries`);
+
+  // A journeyman nobody managed and who was never any good is not remembered,
+  // or the hall of fame is a list of everyone who ever played.
+  const nobody = generatePlayer(new Rng(31), {
+    nationId: 'ALB', pos: 'DC', age: 34, targetCA: 60, targetPA: 62, clubRep: 30, leagueRep: 35,
+  });
+  nobody.career = { apps: 40, goals: 0, assists: 1, cleanSheets: 0, motm: 0, seasons: [] };
+  const hallBefore = wcx.hallOfFame.length;
+  retirePlayer(gcx, nobody);
+  check('a journeyman nobody managed is not remembered', wcx.hallOfFame.length === hallBefore,
+    `${wcx.hallOfFame.length} v ${hallBefore}`);
+
+  // Leaving ends the spell; the next job starts a new one.
+  endSpell(gcx, 'sacked');
+  check('dismissal closes the spell', !!gcx.manager.spells[0].endYear
+    && gcx.manager.spells[0].reason === 'sacked');
+  takeOverClub(gcx, lowLeague.clubIds[1], 'Test', 'ALB');
+  check('a new job opens a new spell', gcx.manager.spells.length === 2
+    && !gcx.manager.spells[1].endYear);
+  check('the record spans both clubs', careerTotals(gcx.manager).clubs === 1,
+    'only one season has been completed so far');
+
+  // The wiring, not just the function: a tracked player who is actually
+  // transferred has to end up with a destination on the career page. The
+  // five-season probe never sold anybody, so this forces the case rather than
+  // waiting for one - an unfired hook and a hook that does not exist look the
+  // same from the outside.
+  const gsell = newGame({ seed: 3131, size: 'small', managerName: 'Test', clubId: null });
+  const topsell = gsell.world.leagues.find((l) => l.tier === 1);
+  takeOverClub(gsell, topsell.clubIds[4], 'Test', 'ALB');
+  const mine = userClub(gsell);
+  const leaving = gsell.world.players[mine.squad[3]];
+  leaving.season.apps = 24;
+  trackNotable(gsell, mine);
+  check('the player about to be sold is tracked',
+    gsell.manager.notable.some((n) => n.playerId === leaving.id));
+  const elsewhere = gsell.world.clubs[topsell.clubIds[9]];
+  completeTransfer(gsell, leaving, mine.id, elsewhere.id, 5e6, { wage: 30000, years: 3 });
+  rolloverSeason(gsell);
+  const soldRow = gsell.manager.notable.find((n) => n.playerId === leaving.id);
+  check('a sold player gets a destination on the career page', !!soldRow?.wentTo,
+    soldRow?.wentTo || 'nothing recorded');
+  check('the transfer-log scan keeps a watermark',
+    gsell.manager.departuresSeen === gsell.transferLog.length,
+    `${gsell.manager.departuresSeen} of ${gsell.transferLog.length}`);
+
+  // ...and all of it survives a save, or a career page is a screen that forgets.
+  const backc = deserialiseGame(JSON.parse(JSON.stringify(serialiseGame(gcx))));
+  check('the career survives a save',
+    backc.manager.history.length === gcx.manager.history.length
+    && backc.manager.trophies.length === gcx.manager.trophies.length
+    && backc.manager.notable.length === gcx.manager.notable.length
+    && backc.manager.spells.length === gcx.manager.spells.length
+    && backc.world.hallOfFame.length === wcx.hallOfFame.length);
+  record('career record after one season', `${careerTotals(gcx.manager).all.matches} matches, `
+    + `${gcx.manager.trophies.length} honours, ${gcx.manager.notable.length} players remembered`);
 }
 
 // --- A job is a job ----------------------------------------------------------
