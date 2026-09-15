@@ -57,6 +57,10 @@ export function packPlayer(p) {
       p.contract.wage, p.contract.expiresYear, p.contract.signedYear,
       p.contract.releaseClause || 0, p.contract.goalBonus || 0, p.contract.appearanceFee || 0,
       p.contract.loanedFrom || 0, p.contract.loanUntilYear || 0, p.contract.wageShare ?? null,
+      // Appended rather than inserted: a save written before sell-on clauses
+      // existed has a nine-element array, and reading past its end gives
+      // undefined, which falls back to no clause.
+      p.contract.sellOn || 0, p.contract.sellOnClub || 0,
     ] : null,
     ss: packStats(p.season),
     ca: p.career,
@@ -145,6 +149,7 @@ export function unpackPlayer(d) {
       wage: d.ct[0], expiresYear: d.ct[1], signedYear: d.ct[2], releaseClause: d.ct[3],
       goalBonus: d.ct[4], appearanceFee: d.ct[5], loanedFrom: d.ct[6] || null,
       loanUntilYear: d.ct[7] || null, wageShare: d.ct[8],
+      sellOn: d.ct[9] || 0, sellOnClub: d.ct[10] || null,
     } : null,
     season: unpackStats(d.ss),
     career: d.ca || { apps: 0, goals: 0, assists: 0, cleanSheets: 0, motm: 0, seasons: [] },
@@ -188,6 +193,7 @@ export function serialiseGame(game) {
       transferLog: game.transferLog,
       shortlist: game.shortlist,
       scouted: game.scouted,
+      negotiations: game.negotiations || {},
       offers: game.offers || [],
       status: 'idle',
       pendingMatchId: null,
@@ -281,6 +287,12 @@ export function migrateSave(data) {
   // a contract. An older save has a single `expectation` and a manager working
   // for nothing, so a dismissal would cost the club nothing and the Club screen
   // would show an empty objectives list until the next rollover.
+  // v6 -> v7: negotiations persist between rounds, so they have to persist
+  // across a save too - the whole point of a reserve price the seller remembers
+  // is that quitting to the menu is not a way to reset it.
+  if (version < 7 && data.game && !data.game.negotiations) {
+    data.game.negotiations = {};
+  }
   if (version < 6) {
     const leagues = data.world?.leagues || [];
     for (const id in data.world?.clubs || {}) {
@@ -337,6 +349,7 @@ export function deserialiseGame(raw) {
     transferLog: g.transferLog,
     shortlist: g.shortlist || [],
     scouted: g.scouted || {},
+    negotiations: g.negotiations || {},
     offers: g.offers || [],
     status: 'idle',
     pendingMatchId: null,

@@ -95,7 +95,19 @@ export function evaluateContract(world, player, club, offer) {
   const currentClub = player.clubId ? world.clubs[player.clubId] : null;
   let score = 6; // a genuine offer starts with the benefit of the doubt
 
-  score += clamp((offer.wage / demand.wage - 1) * 120, -60, 45);
+  // The money term used to be clamp((ratio - 1) * 120, -60, 45). The floor was
+  // the defect: a shortfall could never cost more than 60 points while the
+  // bonuses below - a step up in reputation, a promised role, being listed or
+  // unhappy - are not bounded at all and routinely sum past it. Measured across
+  // 1,187 players, 43% would sign for under a tenth of the wage they had just
+  // asked for, and the median signed for 55% of it. Above the demand this is
+  // arithmetically identical to what it replaces, so the AI clubs - which only
+  // ever offer 1.02 to 1.2 times the demand - are unaffected; below it, the cost
+  // of a cut now grows until it cannot be outvoted.
+  const ratio = offer.wage / Math.max(1, demand.wage);
+  score += ratio >= 1
+    ? Math.min(45, (ratio - 1) * 120)
+    : -((1 - ratio) ** 1.4) * 420;
 
   const repGain = club.rep - (currentClub?.rep ?? 30);
   score += repGain * remap(player.hidden?.ambition ?? 10, 1, 20, 0.5, 1.6);
@@ -157,6 +169,22 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
     to.finances.ledger.push({ day: game.day, label: `Signed ${player.name}${from ? ` from ${from.short}` : ''}`, amount: -fee, category: 'transfer' });
   }
 
+  // An old sell-on clause falls due. This is what makes conceding one a real
+  // cost rather than a discount with no consequence: the club he came from
+  // takes their share of this sale before the selling club sees it.
+  const owed = player.contract?.sellOn && player.contract.sellOnClub && fee > 0
+    ? world.clubs[player.contract.sellOnClub] : null;
+  if (owed && from && owed.id !== from.id) {
+    const share = Math.round(fee * (player.contract.sellOn / 100));
+    if (share > 0) {
+      from.finances.balance -= share;
+      from.finances.ledger.push({ day: game.day, label: `Sell-on clause: ${player.name}`, amount: -share, category: 'transfer' });
+      owed.finances.balance += share;
+      owed.finances.seasonIncome += share;
+      owed.finances.ledger.push({ day: game.day, label: `Sell-on clause: ${player.name}`, amount: share, category: 'transfer' });
+    }
+  }
+
   player.clubId = to.id;
   player.contract = {
     wage: contract.wage,
@@ -168,6 +196,9 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
     loanedFrom: extra.loanFrom || null,
     loanUntilYear: extra.loanUntil || null,
     wageShare: extra.wageShare ?? null,
+    // A sell-on concession follows the player, not the deal that created it.
+    sellOn: extra.sellOn || 0,
+    sellOnClub: extra.sellOn && from ? from.id : null,
   };
   player.transferStatus = 'none';
   player.unhappy = null;

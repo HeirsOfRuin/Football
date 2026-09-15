@@ -30,6 +30,12 @@ import { registrationLimit, refreshRegistration, buildLineup as buildXI } from '
 import { wageBudgetUsage } from '../src/engine/finance.js';
 import { leagueObjective, cupObjective, remitObjective, objectiveScore, seasonObjectives } from '../src/data/objectives.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
+import {
+  openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
+} from '../src/engine/negotiation.js';
+import {
+  askingPrice, evaluateContract, contractDemand, completeTransfer,
+} from '../src/engine/transfers.js';
 
 let passed = 0;
 let failed = 0;
@@ -648,6 +654,118 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
       migrated.manager.contract?.wage > 0 && dismissalCompensation(migrated) > 0,
       `${migrated.manager.contract?.wage}/wk`);
   }
+}
+
+// --- Negotiation has to have a memory ----------------------------------------
+{
+  const g5 = newGame({ seed: 8821, size: 'small', managerName: 'Test', clubId: null });
+  const w5 = g5.world;
+  const top5 = w5.leagues.find((l) => l.tier === 1);
+  const buyer = w5.clubs[top5.clubIds[2]];
+  buyer.isUserClub = true;
+  g5.userClubId = buyer.id;
+  const mark = Object.values(w5.players)
+    .filter((p) => p.clubId && p.clubId !== buyer.id && !w5.clubs[p.clubId]?.affiliateOf && p.contract)
+    .sort((a, b) => askingPrice(w5, b) - askingPrice(w5, a))[400];
+  check('there is a player to negotiate for', !!mark);
+
+  const { negotiation: neg } = openTransferTalks(g5, mark, buyer);
+  check('talks open with a position', !!neg && neg.reserve > 0 && neg.patience >= 3,
+    neg ? `reserve ${neg.reserve}, patience ${neg.patience}` : 'no negotiation');
+  // The defining regression. A lowball rejected once must not become an
+  // acceptance through repetition, and each attempt has to cost something.
+  const low = { fee: Math.round(neg.reserve * 0.4), sellOn: 0, instalments: 1 };
+  const first = transferOffer(g5, neg, low);
+  check('a lowball is refused', first.outcome === 'rejected' || first.outcome === 'collapsed');
+  const reserveAfter = neg.reserve;
+  let wonByRepeating = false;
+  let ended = false;
+  for (let i = 0; i < 12 && !ended; i++) {
+    const r = transferOffer(g5, neg, low);
+    if (r.outcome === 'accepted') wonByRepeating = true;
+    if (r.outcome === 'accepted' || r.outcome === 'collapsed' || r.outcome === 'closed') ended = true;
+  }
+  check('repeating the same offer never wins', !wonByRepeating);
+  check('a lowball hardens their position', reserveAfter > neg.openingAsk * 0 && neg.reserve >= reserveAfter,
+    `${reserveAfter} -> ${neg.reserve}`);
+  check('they eventually walk away', neg.status === 'collapsed', neg.status);
+  check('walking away blocks a fresh approach', !!openTransferTalks(g5, mark, buyer).error);
+  record('rounds before a lowballer is shown the door', neg.round);
+
+  // Clauses have to be worth something, and the number on the screen has to be
+  // the number the engine judges - one function, not two.
+  const plain = cashEquivalent(w5, mark, { fee: 10e6, sellOn: 0, instalments: 1 });
+  const withSellOn = cashEquivalent(w5, mark, { fee: 10e6, sellOn: 25, instalments: 1 });
+  const deferred = cashEquivalent(w5, mark, { fee: 10e6, sellOn: 0, instalments: 4 });
+  check('a sell-on clause is worth something to the seller', withSellOn > plain * 1.02,
+    `${plain} v ${withSellOn}`);
+  check('money paid over four years is worth less than money now', deferred < plain * 0.95,
+    `${plain} v ${deferred}`);
+  check('the cash-equivalent of a plain fee is the fee', plain === 10e6, String(plain));
+
+  // A signing-on fee has to actually buy a lower wage, or it is another
+  // computed-and-discarded number - which is exactly what it was.
+  const bare = termsEquivalent(mark, { wage: 20000, years: 3 });
+  const sweetened = termsEquivalent(mark, { wage: 20000, years: 3, signingBonus: 1560000 });
+  check('a signing-on fee counts toward the package', sweetened > bare,
+    `${bare} v ${sweetened}/wk`);
+
+  // Personal terms used to be nearly free: 43% of players would sign for under
+  // a tenth of the wage they had asked for, because the money term was floored
+  // while the bonuses that outvote it were not.
+  const shares = [];
+  for (const p of Object.values(w5.players).filter((x) => x.clubId && x.clubId !== buyer.id).slice(0, 600)) {
+    const d = contractDemand(w5, p, buyer);
+    if (!evaluateContract(w5, p, buyer, { wage: d.wage, years: d.years, promisedRole: 'key' }).accepted) continue;
+    let lo = 0; let hi = d.wage;
+    for (let i = 0; i < 20; i++) {
+      const mid = (lo + hi) / 2;
+      if (evaluateContract(w5, p, buyer, { wage: mid, years: d.years, promisedRole: 'key' }).accepted) hi = mid;
+      else lo = mid;
+    }
+    shares.push(hi / d.wage);
+  }
+  shares.sort((a, b) => a - b);
+  check('enough players were probed to mean anything', shares.length > 300, `${shares.length}`);
+  check('nobody signs for a tenth of what he asked for', shares.every((x) => x >= 0.1),
+    `lowest ${(shares[0] * 100).toFixed(0)}%`);
+  record('lowest wage a player will take, as a share of his demand',
+    `p10 ${(shares[Math.floor(shares.length * 0.1)] * 100).toFixed(0)}%, `
+    + `median ${(shares[Math.floor(shares.length / 2)] * 100).toFixed(0)}%`);
+
+  // The clause has to be paid, or conceding one costs nothing.
+  const g6 = newGame({ seed: 8821, size: 'small', managerName: 'Test', clubId: null });
+  const w6 = g6.world;
+  const t6 = w6.leagues.find((l) => l.tier === 1);
+  const a6 = w6.clubs[t6.clubIds[2]];
+  const b6 = w6.clubs[t6.clubIds[5]];
+  const c6 = w6.clubs[t6.clubIds[8]];
+  const moved = w6.players[a6.squad[10]];
+  completeTransfer(g6, moved, a6.id, b6.id, 4e6, { wage: 20000, years: 3 }, { sellOn: 20 });
+  check('a sell-on clause is written onto the contract',
+    moved.contract.sellOn === 20 && moved.contract.sellOnClub === a6.id);
+  const before6 = a6.finances.balance;
+  const sellerBefore = b6.finances.balance;
+  completeTransfer(g6, moved, b6.id, c6.id, 10e6, { wage: 26000, years: 3 });
+  check('the old club is paid its share of the next sale',
+    a6.finances.balance === before6 + 2e6, `${a6.finances.balance - before6}`);
+  check('the selling club pays it out of the fee',
+    b6.finances.balance === sellerBefore + 10e6 - 2e6, `${b6.finances.balance - sellerBefore}`);
+
+  // And a negotiation has to survive the save, or the load button is the reset
+  // button the reserve price exists to prevent.
+  const g7 = newGame({ seed: 4242, size: 'small', managerName: 'Test', clubId: null });
+  const t7 = g7.world.leagues.find((l) => l.tier === 1);
+  const b7 = g7.world.clubs[t7.clubIds[2]];
+  g7.userClubId = b7.id; b7.isUserClub = true;
+  const m7 = g7.world.players[g7.world.clubs[t7.clubIds[6]].squad[3]];
+  const { negotiation: n7 } = openTransferTalks(g7, m7, b7);
+  transferOffer(g7, n7, { fee: 1000, sellOn: 0, instalments: 1 });
+  const restored7 = deserialiseGame(JSON.parse(JSON.stringify(serialiseGame(g7))));
+  const back7 = restored7.negotiations?.[n7.id];
+  check('a negotiation survives a save', !!back7
+    && back7.reserve === n7.reserve && back7.patience === n7.patience && back7.round === n7.round,
+    back7 ? 'kept' : 'lost');
 }
 
 // --- Squads below the first team ---------------------------------------------

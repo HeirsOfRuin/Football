@@ -21,12 +21,13 @@ import {
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
+import { pruneNegotiations } from '../engine/negotiation.js';
 import { news, matchHeadline } from '../engine/news.js';
 
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 6;
+export const GAME_VERSION = 7;
 
 export function newGame(opts = {}) {
   const {
@@ -58,6 +59,7 @@ export function newGame(opts = {}) {
     transferLog: [],
     shortlist: [],
     scouted: {},
+    negotiations: {},
     status: 'idle',
     pendingMatchId: null,
     lastResults: [],
@@ -499,6 +501,9 @@ export function advanceDay(game) {
   // the intake day used to skip the intake for every club in the world, for that
   // year, permanently - and nothing would have said so.
   if (game.day === KEY_DAYS.youthIntake) runYouthIntake(game, dayRng);
+  // Before the early return as well: talks that have gone cold should not be
+  // held open by the accident of a fixture landing on a Monday.
+  if (game.day % 7 === 0) pruneNegotiations(game);
 
   if (userFixture) {
     game.status = 'userMatch';
