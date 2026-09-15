@@ -157,7 +157,9 @@ export function unpackPlayer(d) {
 
 /** Strip runtime-only fields that can be recomputed after loading. */
 function cleanClub(club) {
-  const { _roleThresholds, ...rest } = club;
+  // Both underscore fields are caches derived from the squad; persisting them
+  // would let a save disagree with itself after a transfer.
+  const { _roleThresholds, _registered, ...rest } = club;
   return rest;
 }
 
@@ -262,6 +264,17 @@ export function migrateSave(data) {
       club.trainingIntensity = club.trainingIntensity || 'Normal';
       club.trainingFocus = club.trainingFocus || 'Balanced';
       club.training = club.training || { slots: [] };
+    }
+  }
+  // v4 -> v5: the academy moves out of the first-team squad, and squads gain a
+  // registration list. An older save has every scholar mixed into club.squad;
+  // splitting them out retroactively would change a squad the manager has been
+  // picking from, so they stay where they are and only the new fields appear.
+  if (version < 5 && data.world?.clubs) {
+    for (const id in data.world.clubs) {
+      const club = data.world.clubs[id];
+      club.youthSquad = club.youthSquad || [];
+      club.registration = club.registration || [];
     }
   }
   return { ...data, v: GAME_VERSION };

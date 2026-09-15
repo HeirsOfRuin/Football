@@ -3,6 +3,11 @@
 import { clamp, remap } from '../core/util.js';
 import { commercialIncome } from '../data/nations.js';
 
+/** Where a club's money actually lands: a reserve side's books are its parent's. */
+export function bookkeeper(world, club) {
+  return club?.affiliateOf ? (world.clubs[club.affiliateOf] || club) : club;
+}
+
 export function ledgerEntry(club, day, label, amount, category) {
   club.finances.balance += amount;
   if (amount > 0) club.finances.seasonIncome += amount;
@@ -24,11 +29,15 @@ export function applyMatchdayIncome(game, club, opponent, attendance, comp) {
   const price = club.finances.ticketPrice * (comp === 'cup' ? 0.85 : comp === 'continental' ? 1.5 : 1);
   const gate = attendance * price;
   const extras = gate * 0.38; // concessions, hospitality, programmes
-  ledgerEntry(club, game.day, `Gate receipts vs ${opponent.short}`, Math.round(gate + extras), 'matchday');
+  ledgerEntry(bookkeeper(game.world, club), game.day,
+    `Gate receipts vs ${opponent.short}`, Math.round(gate + extras), 'matchday');
 }
 
 /** Monthly commercial and sponsorship income. */
 export function applyMonthlyIncome(game, club) {
+  // A reserve side has no sponsors and no facilities of its own - it uses the
+  // parent's, which are already being paid for once.
+  if (club.affiliateOf) return;
   const nation = game.world.nations.find((n) => n.id === club.nation);
   const commercial = commercialIncome(club.rep, nation?.wealth ?? 0.7) / 12;
   const success = club.lastFinish ? remap(club.lastFinish, 1, 20, 1.18, 0.88) : 1;
@@ -41,24 +50,54 @@ export function applyMonthlyIncome(game, club) {
 export function payWeeklyWages(game, club) {
   const world = game.world;
   let total = 0;
-  for (const id of club.squad) {
+  // Scholars are on the books too. They live in a separate list so they do not
+  // count against registration, but they are still paid.
+  for (const id of [...club.squad, ...(club.youthSquad || [])]) {
     const p = world.players[id];
     if (!p?.contract) continue;
     if (p.contract.loanedFrom && p.contract.wageShare != null) total += p.contract.wage * p.contract.wageShare;
+    // A two-way contract pays the reserve rate while he is at the reserve side.
+    // Players who refused one have no wageReserve and are paid in full wherever
+    // they play, which is the whole reason a star cannot be stashed.
+    else if (club.affiliateOf && p.contract.wageReserve) total += p.contract.wageReserve;
     else total += p.contract.wage;
   }
   // Staff wages scale with facilities and reputation.
-  const staff = (club.rep * 900) + (club.facilities.training + club.facilities.youth + club.facilities.scouting + club.facilities.medical) * 700;
+  // A reserve side carries no separate staff bill: it shares the parent's.
+  const staff = club.affiliateOf ? 0
+    : (club.rep * 900) + (club.facilities.training + club.facilities.youth + club.facilities.scouting + club.facilities.medical) * 700;
   const amount = -(total + staff);
-  ledgerEntry(club, game.day, 'Wages', Math.round(amount), 'wages');
+  const books = bookkeeper(world, club);
+  ledgerEntry(books, game.day, club.affiliateOf ? `Wages — ${club.short}` : 'Wages', Math.round(amount), 'wages');
   return -amount;
 }
 
+/**
+ * The club's weekly wage bill, including its reserve side.
+ *
+ * The reserve wages count against the parent's budget - at the reduced rate - so
+ * sending a player down is a visible saving rather than a way of hiding him off
+ * the books entirely.
+ */
 export function weeklyWageBill(world, club) {
+  // Asked about a reserve side directly, answer for the parent: the two share a
+  // budget, and adding them separately would count the same wages twice.
+  if (club.affiliateOf) return weeklyWageBill(world, bookkeeper(world, club));
   let total = 0;
   for (const id of club.squad) {
     const p = world.players[id];
     if (p?.contract) total += p.contract.wage;
+  }
+  for (const id of club.youthSquad || []) {
+    const p = world.players[id];
+    if (p?.contract) total += p.contract.wage;
+  }
+  const reserve = club.reserveClubId ? world.clubs[club.reserveClubId] : null;
+  if (reserve) {
+    for (const id of reserve.squad) {
+      const p = world.players[id];
+      if (p?.contract) total += p.contract.wageReserve || p.contract.wage;
+    }
   }
   return total;
 }
@@ -75,11 +114,12 @@ export function payLeaguePrize(game, club, league, position) {
   const places = league.teams;
   const merit = perPlace * (places - position + 1);
   const tv = league.tvMoney / places;
-  ledgerEntry(club, game.day, `${league.name} prize money (${position})`, Math.round(merit + tv), 'prize');
+  ledgerEntry(bookkeeper(game.world, club), game.day,
+    `${league.name} prize money (${position})`, Math.round(merit + tv), 'prize');
 }
 
 export function payCompetitionPrize(game, club, label, amount) {
-  ledgerEntry(club, game.day, label, Math.round(amount), 'prize');
+  ledgerEntry(bookkeeper(game.world, club), game.day, label, Math.round(amount), 'prize');
 }
 
 /**

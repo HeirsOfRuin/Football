@@ -13,6 +13,7 @@ import * as dashboardScreen from './screens/dashboard.js';
 import * as squadScreen from './screens/squad.js';
 import * as tacticsScreen from './screens/tactics.js';
 import * as trainingScreen from './screens/training.js';
+import * as squadsScreen from './screens/squads.js';
 import * as fixturesScreen from './screens/fixtures.js';
 import * as leagueScreen from './screens/league.js';
 import * as transfersScreen from './screens/transfers.js';
@@ -29,6 +30,7 @@ const SCREENS = {
   squad: squadScreen,
   tactics: tacticsScreen,
   training: trainingScreen,
+  squads: squadsScreen,
   fixtures: fixturesScreen,
   league: leagueScreen,
   transfers: transfersScreen,
@@ -43,8 +45,12 @@ const NAV = [
   { id: 'dashboard', label: 'Home' },
   { id: 'inbox', label: 'Inbox', badge: (app) => unreadCount(app.game) },
   { sep: true },
-  { id: 'squad', label: 'Squad' },
+  // "Players" is the list of people and their contracts; "Squads" is which of
+  // the three squads each of them is in. Both were called Squad, which read as a
+  // duplicate nav entry rather than two different jobs.
+  { id: 'squad', label: 'Players' },
   { id: 'tactics', label: 'Tactics' },
+  { id: 'squads', label: 'Squads' },
   { id: 'training', label: 'Training' },
   { id: 'club', label: 'Club' },
   { sep: true },

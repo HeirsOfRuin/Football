@@ -164,6 +164,181 @@ function financesForClub(rng, club, league, nation) {
   };
 }
 
+/**
+ * Create the reserve sides that fill the held-back places.
+ *
+ * A reserve side is an ordinary club with `affiliateOf` pointing at its parent:
+ * it has a league, a table, fixtures and a ground, so the match engine, the
+ * scheduler, the finances and the tables all handle it without knowing it is
+ * anything special. Everything that makes it *not* an ordinary club is a guard
+ * elsewhere - no cup, no promotion past the parent, no job, no transfers.
+ */
+export function assignReserveSides(world, rng, year) {
+  const byNation = new Map();
+  for (const l of world.leagues) {
+    if (!byNation.has(l.nation)) byNation.set(l.nation, []);
+    byNation.get(l.nation).push(l);
+  }
+
+  for (const [nationId, ls] of byNation) {
+    ls.sort((a, b) => a.tier - b.tier);
+    const depth = ls.length;
+    const gap = depth >= 3 ? 2 : 1;
+    const nation = NATION_BY_ID[nationId];
+
+    for (const host of ls) {
+      const slots = host.reserveSlots || 0;
+      if (!slots) continue;
+      const parentLeague = ls.find((x) => x.tier === host.tier - gap);
+      // Only a professional club runs a reserve side, and the biggest ones
+      // first - which is also how it works in the leagues this is modelled on.
+      const parents = parentLeague
+        ? sortBy(parentLeague.clubIds.map((id) => world.clubs[id])
+          .filter((c) => c && !c.affiliateOf && c.status === 'professional'),
+        { key: (c) => c.rep, desc: true }).slice(0, slots)
+        : [];
+
+      for (const parent of parents) {
+        const club = makeReserveSide(world, rng, parent, host, nation, year);
+        world.clubs[club.id] = club;
+        host.clubIds.push(club.id);
+        parent.reserveClubId = club.id;
+      }
+
+      // If a division could not find enough parents - a shallow pyramid, or a
+      // tier with few professional clubs above it - it ends up smaller than its
+      // template said. Correct `teams` to what the division actually contains
+      // rather than leaving the two to disagree: prize money, TV shares and
+      // board expectations are all computed from it, and a division that claims
+      // twenty teams while fielding eighteen pays out for places nobody can
+      // finish in.
+      if (host.clubIds.length !== host.teams) host.teams = host.clubIds.length;
+    }
+  }
+}
+
+/** One reserve side, squad and all. */
+export function makeReserveSide(world, rng, parent, host, nation, year) {
+  // Pitched below its host division's own level: a reserve side is a proving
+  // ground, not a contender.
+  const rep = clamp(Math.round(host.rep * 0.82), 5, 99);
+  const status = statusForRep(rep);
+  const id = `r${parent.id}`;
+  const club = {
+    id,
+    name: `${parent.short} B`,
+    short: `${parent.short} B`,
+    code: `${(parent.code || 'RES').slice(0, 2)}B`,
+    nation: parent.nation,
+    leagueId: host.id,
+    status: status.id,
+    affiliateOf: parent.id,
+    city: parent.city,
+    founded: parent.founded,
+    rep,
+    colours: parent.colours,
+    identity: parent.identity,
+    stadium: { name: `${parent.stadium.name} (Training Ground)`, capacity: 1200 },
+    squad: [],
+    youthSquad: [],
+    registration: [],
+    tactic: defaultTactic('4-4-2'),
+    manager: generateManager(rng, parent.nation, rep),
+    facilities: { ...parent.facilities },
+    coaching: { ...parent.coaching },
+    trainingFocus: 'Balanced',
+    trainingIntensity: 'Normal',
+    training: { slots: [] },
+    // The remit the manager sets: who the reserve coach picks.
+    reserveRemit: 'balanced',
+    // A real expectation, not null: eleven places across the UI and the AI read
+    // board.expectation without checking, and "develop players" is an honest
+    // description of what a reserve side is actually for.
+    board: {
+      expectation: { type: 'mid', target: host.teams, label: 'Develop players for the first team' },
+      confidence: 70, patience: 99, wantsYouth: true, wantsAttacking: false,
+    },
+    finances: null,
+    form: [],
+    history: [],
+    morale: 70,
+    isUserClub: false,
+  };
+  club.finances = financesForClub(rng, club, host, nation);
+
+  // Its own young squad, tuned to the division it plays in - not a slice off the
+  // parent, which would gut the first team on day one.
+  const baseCA = abilityForReputation(rep);
+  const order = squadPlan(rng, 16);
+  for (let i = 0; i < order.length; i++) {
+    const pos = order[i];
+    const curve = SQUAD_QUALITY_CURVE[Math.min(i, SQUAD_QUALITY_CURVE.length - 1)];
+    const age = rng.int(17, 21);
+    let targetCA = baseCA * curve + rng.normalClamped(0, 5, -12, 12);
+    targetCA *= remap(age, 16, 21, 0.72, 0.97);
+    targetCA = clamp(Math.round(targetCA), 18, 198);
+    const natId = pickNationality(rng, parent.nation, rep, world.nations.map((n) => n.id));
+    // Higher ceilings than their ability suggests: these are prospects.
+    const pa = clamp(rollPotential(rng, natId, parent.rep, age, targetCA), targetCA, 198);
+    const player = generatePlayer(rng, {
+      nationId: natId, pos, age, targetCA, targetPA: pa,
+      clubRep: rep, leagueRep: host.rep, year,
+    });
+    player.clubId = club.id;
+    player.contract = makeContract(rng, player, club, year, targetCA, status);
+    // Everyone here is on a two-way deal; that is what a reserve side is for.
+    player.contract.wageReserve = Math.round(player.contract.wage * 0.45);
+    world.players[player.id] = player;
+    club.squad.push(player.id);
+  }
+  assignSquadNumbers(rng, club, world);
+  return club;
+}
+
+/**
+ * Decide how many places in each division are held for reserve sides.
+ *
+ * Computed from the pyramid that was actually generated rather than stored on
+ * the league templates: the same division hosts reserve football in one world
+ * size and not in another (a nation's tier 2 is mid-table in a deep world and
+ * the basement in a shallow one), so a fixed per-template number would be wrong
+ * half the time.
+ *
+ * Holding the places back here is what makes reserve sides cost nothing: they
+ * fill slots that would otherwise have gone to independent clubs, so the fixture
+ * list, the table and the simulation load are the same either way.
+ */
+export function planReserveSlots(leagues) {
+  const byNation = new Map();
+  for (const l of leagues) {
+    if (!byNation.has(l.nation)) byNation.set(l.nation, []);
+    byNation.get(l.nation).push(l);
+    l.reserveSlots = 0;
+  }
+  for (const [, ls] of byNation) {
+    ls.sort((a, b) => a.tier - b.tier);
+    const depth = ls.length;
+    if (depth < 2) continue;
+    // Two tiers below a parent where the pyramid allows it, one below when a
+    // nation is only two divisions deep - so a shallow world still gets reserve
+    // football rather than silently losing the feature.
+    const gap = depth >= 3 ? 2 : 1;
+    for (const l of ls) {
+      const parentTier = l.tier - gap;
+      // Only the top two tiers run reserve sides. Reaching further down was
+      // tried and measured: a third-tier parent is often part-time, part-time
+      // clubs do not run reserve sides, and a quarter of those divisions then
+      // could not fill the places held for them - twelve short divisions across
+      // thirty-six generated worlds.
+      if (parentTier < 1 || parentTier > 2) continue;
+      // About a quarter of a division, which is roughly what the Spanish and
+      // German lower leagues actually look like.
+      l.reserveSlots = Math.max(2, Math.round(l.teams * 0.25));
+    }
+  }
+  return leagues;
+}
+
 export function generateWorld(opts = {}) {
   const {
     seed = Date.now(), size = 'medium', year = 2025, customPlayers = [], customPlacement = 'free',
@@ -192,6 +367,7 @@ export function generateWorld(opts = {}) {
     l.hasDivisionAbove = leagues.some((x) => x.nation === l.nation && x.tier === l.tier - 1);
     l.hasDivisionBelow = leagues.some((x) => x.nation === l.nation && x.tier === l.tier + 1);
   }
+  planReserveSlots(leagues);
 
   const world = {
     seed,
@@ -228,7 +404,12 @@ export function generateWorld(opts = {}) {
       }
       reps.sort((a, b) => b - a);
 
-      for (let i = 0; i < league.teams; i++) {
+      // Generate the division short by however many places are held for reserve
+      // sides, and drop the weakest reputations - a reserve side belongs at the
+      // bottom of its division, which is exactly where those slots were.
+      const realClubs = league.teams - (league.reserveSlots || 0);
+
+      for (let i = 0; i < realClubs; i++) {
         const city = cityNamer();
         const name = clubNamer(city);
         const rep = Math.round(reps[i]);
@@ -250,6 +431,13 @@ export function generateWorld(opts = {}) {
           colours: null, // filled by assignIdentities once the division is complete
           stadium: { name: makeStadiumName(nRng, nationId, city), capacity },
           squad: [],
+          // Scholars live apart from the first team: they do not eat into the
+          // registration limit, and a full first team no longer silently
+          // forfeits the year's intake.
+          youthSquad: [],
+          // Ordered list of who may actually be selected. One source of truth;
+          // the Set beside it is a cache, built on demand and never persisted.
+          registration: [],
           tactic: defaultTactic(nRng.pick(['4-4-2', '4-2-3-1', '4-3-3', '4-1-4-1', '3-5-2', '4-4-2 Diamond'])),
           manager: generateManager(nRng, nationId, rep),
           facilities: {
@@ -325,6 +513,10 @@ export function generateWorld(opts = {}) {
       assignIdentities(subRng(nRng, `identity:${league.id}`), league.clubIds.map((id) => world.clubs[id]));
     }
   }
+
+  // Reserve sides fill the places held back above, before the cups are drawn -
+  // they must exist as clubs, and must be excluded from the cup, in that order.
+  assignReserveSides(world, subRng(rng, 'reserves'), year);
 
   // Free agents — a pool of unattached professionals for emergencies.
   const faRng = subRng(rng, 'freeagents');
@@ -460,7 +652,11 @@ export function materialiseCustomPlayer(template, world, year) {
 function buildCompetitions(world, rng) {
   // Domestic cups: every club in a nation's leagues enters.
   for (const nation of world.nations) {
-    const clubIds = Object.values(world.clubs).filter((c) => c.nation === nation.id).map((c) => c.id);
+    // Reserve sides do not enter the cup. This one filter removes every possible
+    // parent-versus-reserve tie at a stroke, which is far safer than trying to
+    // spot and redraw them later.
+    const clubIds = Object.values(world.clubs)
+      .filter((c) => c.nation === nation.id && !c.affiliateOf).map((c) => c.id);
     world.competitions[`${nation.id}_CUP`] = {
       id: `${nation.id}_CUP`,
       name: `${nation.name} Cup`,

@@ -3,19 +3,21 @@
 import { Rng, subRng } from '../core/rng.js';
 import { clamp, remap, sortBy, money } from '../core/util.js';
 import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, dayToDate } from '../core/calendar.js';
-import { generateWorld, squadStrength } from '../gen/worldgen.js';
+import { generateWorld, squadStrength, makeReserveSide } from '../gen/worldgen.js';
 import { abilityForReputation } from '../data/nations.js';
-import { generatePlayer, emptyStats, estimateValue } from '../gen/playergen.js';
+import { generatePlayer, emptyStats, estimateValue, estimateWage } from '../gen/playergen.js';
 import { currentAbility } from '../data/attributes.js';
 import { beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
-import { autoPick, autoAssignSpecialists } from '../engine/lineup.js';
+import { autoPick, autoAssignSpecialists, refreshRegistration, registrationLimit } from '../engine/lineup.js';
 import {
   buildLeagueSchedule, scheduleDomesticCup, openNextCupRound, scheduleContinental,
   seedContinental, continentalKnockout, openContinentalRound, sortTable, applyResultToTable,
   emptyTableRow, resolveTie, resetFixtureCounter, leagueZones,
 } from '../engine/season.js';
-import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize } from '../engine/finance.js';
-import { trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots } from '../engine/training.js';
+import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize, ledgerEntry } from '../engine/finance.js';
+import {
+  trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole,
+} from '../engine/training.js';
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { news, matchHeadline } from '../engine/news.js';
@@ -23,7 +25,7 @@ import { news, matchHeadline } from '../engine/news.js';
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 4;
+export const GAME_VERSION = 5;
 
 export function newGame(opts = {}) {
   const {
@@ -130,7 +132,8 @@ export function startSeason(game, isFirst = false) {
 
   for (const comp of Object.values(world.competitions)) {
     if (comp.type === 'cup') {
-      comp.entrants = Object.values(world.clubs).filter((c) => c.nation === comp.nation).map((c) => c.id);
+      comp.entrants = Object.values(world.clubs)
+        .filter((c) => c.nation === comp.nation && !c.affiliateOf).map((c) => c.id);
       addFixtures(game, scheduleDomesticCup(game, comp));
     }
   }
@@ -147,6 +150,10 @@ export function startSeason(game, isFirst = false) {
     club.form = [];
     club.seasonRecord = { w: 0, d: 0, l: 0 };
     club.training = club.training || { slots: [] };
+    club.youthSquad = club.youthSquad || [];
+    refreshRegistration(world, club);
+    if (club.affiliateOf) applyReserveRemit(world, club);
+    else if (!club.isUserClub) aiManageReserves(world, club);
     // AI clubs set their own programme each summer. The user's club keeps
     // whatever the user chose.
     if (!club.isUserClub) {
@@ -479,6 +486,11 @@ export function advanceDay(game) {
     playFixture(game, f);
   }
 
+  // Before the user-match return below, not after it. A user fixture landing on
+  // the intake day used to skip the intake for every club in the world, for that
+  // year, permanently - and nothing would have said so.
+  if (game.day === KEY_DAYS.youthIntake) runYouthIntake(game, dayRng);
+
   if (userFixture) {
     game.status = 'userMatch';
     game.pendingMatchId = userFixture.id;
@@ -488,8 +500,6 @@ export function advanceDay(game) {
   // A monthly read on where the manager stands with the board.
   if (date.dayOfMonth === 2 && game.day > 90) checkBoardMood(game);
 
-  // Youth intake and end-of-season milestones.
-  if (game.day === 268) runYouthIntake(game, dayRng);
   if (game.day === KEY_DAYS.boardReview) return { stopped: true, reason: 'seasonReview' };
 
   return { stopped: false };
@@ -570,7 +580,9 @@ function runWeeklyTraining(game, rng) {
 
 function runTransferDay(game, rng) {
   const world = game.world;
-  const clubs = Object.values(world.clubs).filter((c) => !c.isUserClub);
+  // Reserve sides have no transfer budget and do no business of their own; the
+  // parent signs players, and sends them down.
+  const clubs = Object.values(world.clubs).filter((c) => !c.isUserClub && !c.affiliateOf);
   // A handful of clubs act each day so the market moves gradually.
   const actors = Math.max(4, Math.round(clubs.length * 0.14));
   for (let i = 0; i < actors; i++) {
@@ -640,31 +652,285 @@ function publishTransferDigest(game) {
 function runYouthIntake(game, rng) {
   const world = game.world;
   for (const club of Object.values(world.clubs)) {
-    const all = generateYouthIntake(rng, world, club, world.year, generatePlayer, null);
-    // Only as many scholars as there is room for — otherwise squads grow without
-    // bound, season after season, until the list is unmanageable.
-    const room = Math.max(0, 32 - club.squad.length);
-    const intake = all.slice(0, room);
-    const turnedAway = all.length - intake.length;
+    club.youthSquad = club.youthSquad || [];
+    const intake = generateYouthIntake(rng, world, club, world.year, generatePlayer, null);
+    // Scholars join the academy, not the first team. The old code took only as
+    // many as the first team had room for under a hardcoded cap of 32 - so a
+    // club with a full squad silently forfeited the entire year's crop, and the
+    // only warning came after it had already happened.
     for (const p of intake) {
       world.players[p.id] = p;
-      club.squad.push(p.id);
-      const taken = new Set(club.squad.map((id) => world.players[id]?.squadNumber).filter(Boolean));
-      for (let n = 30; n <= 70; n++) if (!taken.has(n)) { p.squadNumber = n; break; }
+      club.youthSquad.push(p.id);
     }
-    if (club.isUserClub) {
-      if (intake.length) {
-        const best = sortBy(intake, { key: (p) => p.pa, desc: true })[0];
-        news(game, 'youth', 'Youth intake arrives',
-          `${intake.length} young players have joined the academy. The staff are most excited about ${best.name}, `
-          + `a ${best.age}-year-old ${best.positions[0]}.`
-          + (turnedAway ? ` ${turnedAway} more were not offered scholarships — there is no room in the squad for them.` : ''));
-      } else if (turnedAway) {
-        news(game, 'youth', 'No youth intake this year',
-          `The academy produced ${turnedAway} candidates, but with ${club.squad.length} players already registered there was no room `
-          + 'for any of them. Trim the squad if you want next year\'s crop.');
-      }
+    // Academy graduates age out: a scholar who is not promoted by 20 leaves.
+    const leaving = club.youthSquad.filter((id) => (world.players[id]?.age ?? 0) >= 20);
+    for (const id of leaving) {
+      const p = world.players[id];
+      club.youthSquad = club.youthSquad.filter((x) => x !== id);
+      if (p) { p.clubId = null; p.contract = null; world.freeAgents.push(id); }
     }
+
+    if (club.isUserClub && intake.length) {
+      const best = sortBy(intake, { key: (p) => p.pa, desc: true })[0];
+      news(game, 'youth', 'Youth intake arrives',
+        `${intake.length} young players have joined the academy. The staff are most excited about ${best.name}, `
+        + `a ${best.age}-year-old ${best.positions[0]}. Review them on the Squads screen.`
+        + (leaving.length ? `\n\n${leaving.length} scholar${leaving.length === 1 ? '' : 's'} aged out of the academy without being offered terms.` : ''));
+    }
+  }
+}
+
+/** Move a scholar up to the first team. Returns why not, or null on success. */
+export function promoteFromAcademy(game, playerId) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club) return 'You are not managing a club.';
+  if (!club.youthSquad?.includes(playerId)) return 'He is not in your academy.';
+  const p = world.players[playerId];
+  if (!p) return 'Player not found.';
+  club.youthSquad = club.youthSquad.filter((x) => x !== playerId);
+  club.squad.push(playerId);
+  p.clubId = club.id;
+  const taken = new Set(club.squad.map((id) => world.players[id]?.squadNumber).filter(Boolean));
+  for (let n = 12; n <= 70; n++) if (!taken.has(n)) { p.squadNumber = n; break; }
+  refreshRegistration(world, club);
+  refreshSquadThresholds(world, club);
+  return null;
+}
+
+/** Release a scholar. */
+export function releaseFromAcademy(game, playerId) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club?.youthSquad?.includes(playerId)) return 'He is not in your academy.';
+  club.youthSquad = club.youthSquad.filter((x) => x !== playerId);
+  const p = world.players[playerId];
+  if (p) { p.clubId = null; p.contract = null; world.freeAgents.push(playerId); }
+  return null;
+}
+
+// --- The reserve side -------------------------------------------------------
+
+/**
+ * An AI club's own send-downs, run once a summer.
+ *
+ * Without this only the user would use reserve football and every AI club would
+ * carry a bloated first team - the asymmetry would show up as the user's rivals
+ * developing their prospects far more slowly than the user does.
+ */
+export function aiManageReserves(world, club) {
+  const reserve = club.reserveClubId ? world.clubs[club.reserveClubId] : null;
+  if (!reserve) return;
+  const limit = registrationLimit(club);
+  const ranked = sortBy(club.squad.map((id) => world.players[id]).filter(Boolean),
+    { key: (p) => currentAbility(p), desc: true });
+
+  // Anyone outside the registered group who is young enough to gain from playing
+  // goes down; anyone the reserve side has outgrown comes back up.
+  for (const p of ranked.slice(limit)) {
+    if (p.age > 23) continue;
+    if (club.squad.length <= 18) break;
+    club.squad = club.squad.filter((x) => x !== p.id);
+    reserve.squad.push(p.id);
+    p.clubId = reserve.id;
+    if (p.contract && !p.contract.wageReserve) p.contract.wageReserve = Math.round(p.contract.wage * 0.45);
+  }
+  const resRanked = sortBy(reserve.squad.map((id) => world.players[id]).filter(Boolean),
+    { key: (p) => currentAbility(p), desc: true });
+  // Recall only players who are genuinely first-team quality, not merely better
+  // than the last man on a 26-man list. Measuring against the bottom of the
+  // registered group promoted almost every prospect immediately and stripped one
+  // reserve side down to a single player - a division cannot field that.
+  const benchmark = ranked[Math.min(Math.floor(limit * 0.7), ranked.length - 1)];
+  const RESERVE_FLOOR = 16;
+  for (const p of resRanked) {
+    if (reserve.squad.length <= RESERVE_FLOOR) break;
+    if (!benchmark || currentAbility(p) <= currentAbility(benchmark)) break;
+    reserve.squad = reserve.squad.filter((x) => x !== p.id);
+    club.squad.push(p.id);
+    p.clubId = club.id;
+  }
+  refreshRegistration(world, club);
+  refreshRegistration(world, reserve);
+  applyReserveRemit(world, reserve);
+}
+
+/**
+ * What it would take for the board to fund a reserve side, and whether they will.
+ *
+ * Only the biggest clubs are given one at world generation, so without this a
+ * club promoted up through the pyramid would have no route to one at all - and
+ * the whole point of the feature is that it is there for the club you built.
+ */
+export function reserveProposal(game) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club) return { ok: false, reason: 'You are not managing a club.' };
+  if (club.affiliateOf) return { ok: false, reason: 'A reserve side cannot have one of its own.' };
+  if (club.reserveClubId && world.clubs[club.reserveClubId]) {
+    return { ok: false, reason: 'You already run a reserve side.' };
+  }
+  const leagues = world.leagues.filter((l) => l.nation === club.nation).sort((a, b) => a.tier - b.tier);
+  const ownLeague = leagues.find((l) => l.id === club.leagueId);
+  if (!ownLeague) return { ok: false, reason: 'No league found.' };
+  // It has to go at least one division below you, and there must be one.
+  const host = leagues.find((l) => l.tier === ownLeague.tier + 2) || leagues.find((l) => l.tier === ownLeague.tier + 1);
+  if (!host) return { ok: false, reason: 'There is no division below you to enter a reserve side into.' };
+
+  const cost = Math.round(120000 + club.rep * 14000);
+  const confident = club.board.confidence >= 55;
+  const afford = club.finances.balance > cost * 3;
+  const reason = !confident
+    ? 'The board are not convinced enough by your work to fund a second squad.'
+    : !afford ? 'The club cannot afford to set up and run a second squad.' : null;
+  return { ok: !reason, reason, cost, host, league: host.name };
+}
+
+/** Accept the proposal: the reserve side joins next season. */
+export function foundReserveSide(game) {
+  const world = game.world;
+  const club = userClub(game);
+  const proposal = reserveProposal(game);
+  if (!proposal.ok) return proposal.reason;
+
+  const rng = subRng(game.rng, `foundreserve:${club.id}:${game.season}`);
+  const nation = world.nations.find((n) => n.id === club.nation);
+  const reserve = makeReserveSide(world, rng, club, proposal.host, nation, world.year);
+  world.clubs[reserve.id] = reserve;
+  proposal.host.clubIds.push(reserve.id);
+  // The division grows by one. Everything that divides by team count - prize
+  // money, TV shares, board targets - reads this, so it has to move with it.
+  proposal.host.teams = proposal.host.clubIds.length;
+  club.reserveClubId = reserve.id;
+  club.finances.balance -= proposal.cost;
+  ledgerEntry(club, game.day, `Establishing ${reserve.name}`, -proposal.cost, 'upkeep');
+  applyReserveRemit(world, reserve);
+
+  news(game, 'squad', 'The board approve a reserve side',
+    `${reserve.name} will enter ${proposal.host.name} from next season. Fringe and younger players can now be `
+    + 'sent down for regular football at a reduced wage, rather than sitting in the stands.');
+  return null;
+}
+
+/** The club a player is really owned by: a reserve side's players are the parent's. */
+export function ownerClubOf(world, player) {
+  const club = player.clubId ? world.clubs[player.clubId] : null;
+  if (!club) return null;
+  return club.affiliateOf ? (world.clubs[club.affiliateOf] || club) : club;
+}
+
+export function reserveSideOf(world, club) {
+  return club?.reserveClubId ? world.clubs[club.reserveClubId] || null : null;
+}
+
+/**
+ * Whether a player will accept reserve terms.
+ *
+ * This is the whole balance guard. A young or fringe player signs a two-way
+ * deal without complaint; an established professional refuses one, is paid in
+ * full wherever he plays, and resents being sent down - so parking a big earner
+ * in the reserves saves nothing and costs morale, which is exactly what stops
+ * this being a wage exploit.
+ */
+export function acceptsReserveTerms(world, club, player) {
+  if (player.age <= 21) return true;
+  if (player.contract?.wageReserve) return true;
+  return expectedRole(world, club, player) === 'fringe';
+}
+
+/** Send a player down to the reserve side. Returns an error string, or null. */
+export function sendToReserves(game, playerId) {
+  const world = game.world;
+  const club = userClub(game);
+  const reserve = reserveSideOf(world, club);
+  if (!reserve) return 'Your club has no reserve side.';
+  if (!club.squad.includes(playerId)) return 'He is not in your first-team squad.';
+  const p = world.players[playerId];
+  if (!p) return 'Player not found.';
+
+  const willing = acceptsReserveTerms(world, club, p);
+  club.squad = club.squad.filter((x) => x !== playerId);
+  reserve.squad.push(playerId);
+  p.clubId = reserve.id;
+  if (willing && p.contract && !p.contract.wageReserve) {
+    p.contract.wageReserve = Math.round(p.contract.wage * 0.45);
+  }
+  if (!willing) {
+    // He goes, because the manager picks the squad - but he is not happy and he
+    // is still on his full wage.
+    p.unhappy = 'demoted';
+    p.morale = clamp(p.morale - 22, 0, 100);
+  } else {
+    p.unhappy = p.unhappy === 'unregistered' ? null : p.unhappy;
+  }
+  refreshRegistration(world, club);
+  refreshRegistration(world, reserve);
+  refreshSquadThresholds(world, club);
+  refreshSquadThresholds(world, reserve);
+  return null;
+}
+
+/** Bring a player back up to the first team. */
+export function recallFromReserves(game, playerId) {
+  const world = game.world;
+  const club = userClub(game);
+  const reserve = reserveSideOf(world, club);
+  if (!reserve?.squad.includes(playerId)) return 'He is not with your reserve side.';
+  const p = world.players[playerId];
+  reserve.squad = reserve.squad.filter((x) => x !== playerId);
+  club.squad.push(playerId);
+  p.clubId = club.id;
+  if (p.unhappy === 'demoted') p.unhappy = null;
+  refreshRegistration(world, club);
+  refreshRegistration(world, reserve);
+  refreshSquadThresholds(world, club);
+  refreshSquadThresholds(world, reserve);
+  return null;
+}
+
+/**
+ * The reserve coach picks his own side, steered by the remit.
+ *
+ * Deliberately not the manager's job: the whole point of a reserve side is that
+ * it takes players off your list rather than adding a second team sheet.
+ */
+export function applyReserveRemit(world, reserve) {
+  if (!reserve) return;
+  const remit = reserve.reserveRemit || 'balanced';
+  const squad = reserve.squad.map((id) => world.players[id]).filter(Boolean);
+  const score = (p) => {
+    const ca = currentAbility(p);
+    if (remit === 'youth') return ca + Math.max(0, 24 - p.age) * 9;
+    if (remit === 'compete') return ca;
+    return ca + Math.max(0, 22 - p.age) * 4;
+  };
+  reserve.registration = sortBy(squad, { key: score, desc: true })
+    .slice(0, registrationLimit(reserve)).map((p) => p.id);
+  reserve.registrationManual = true;
+  refreshRegistration(world, reserve);
+}
+
+/**
+ * Set which players are registered for matches. The list is trimmed to the
+ * club's limit and anyone left out becomes unhappy - which is the pressure that
+ * makes a second squad worth having rather than a list to ignore.
+ */
+export function setRegistration(game, ids) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club) return;
+  club.registration = ids.filter((id) => club.squad.includes(id)).slice(0, registrationLimit(club));
+  // From here the list is the manager's, and refreshRegistration stops
+  // second-guessing it.
+  club.registrationManual = true;
+  refreshRegistration(world, club);
+  for (const id of club.squad) {
+    const p = world.players[id];
+    if (!p) continue;
+    // Only a player good enough to expect a game resents being left out; a
+    // fringe player knows where he stands.
+    const snubbed = !club._registered.has(id) && expectedRole(world, club, p) !== 'fringe';
+    p.unhappy = snubbed ? 'unregistered' : (p.unhappy === 'unregistered' ? null : p.unhappy);
   }
 }
 
@@ -886,9 +1152,22 @@ function applyPromotionRelegation(game, summary, rng) {
       const upperTable = sortTable(upper.table);
       const lowerTable = sortTable(lower.table);
       const goingDown = upperTable.slice(-upper.relegated).map((r) => r.clubId);
+
+      // A reserve side cannot be promoted into the division its parent plays in,
+      // or above it - so it is passed over and the next club in the table goes
+      // up instead. Skipping it without promoting a replacement would shrink the
+      // division every time a B team finished well.
+      const eligibleUp = lowerTable.filter((r) => {
+        const c = world.clubs[r.clubId];
+        if (!c?.affiliateOf) return true;
+        const parent = world.clubs[c.affiliateOf];
+        const parentLeague = parent && world.leagues.find((l) => l.id === parent.leagueId);
+        return parentLeague ? parentLeague.tier < upper.tier : true;
+      });
+
       // Automatic promotion, then a play-off for the final place.
-      const autoUp = lowerTable.slice(0, Math.max(0, lower.promoted - 1)).map((r) => r.clubId);
-      const playoffPool = lowerTable.slice(Math.max(0, lower.promoted - 1), Math.max(0, lower.promoted - 1) + 4).map((r) => r.clubId);
+      const autoUp = eligibleUp.slice(0, Math.max(0, lower.promoted - 1)).map((r) => r.clubId);
+      const playoffPool = eligibleUp.slice(Math.max(0, lower.promoted - 1), Math.max(0, lower.promoted - 1) + 4).map((r) => r.clubId);
       const playoffWinner = resolvePlayoff(game, playoffPool, rng);
       const goingUp = [...autoUp, playoffWinner].filter(Boolean).slice(0, upper.relegated);
 
@@ -911,6 +1190,57 @@ function applyPromotionRelegation(game, summary, rng) {
         c.history.push({ season: game.season, year: world.year, achievement: `Promoted to ${upper.name}` });
       }
     }
+    enforceReserveSeparation(game, ordered, summary);
+  }
+}
+
+/**
+ * A reserve side must always sit at least one division below its parent.
+ *
+ * Promotion is already blocked from closing the gap upward, but the parent can
+ * close it downward by being relegated - and then the two would share a table,
+ * play each other twice, and the cup guard would not help because this is the
+ * league. Push the reserve side down a tier; if there is no tier below, dissolve
+ * it and send its players back to the parent.
+ */
+function enforceReserveSeparation(game, ordered, summary) {
+  const world = game.world;
+  for (const league of ordered) {
+    for (const id of [...league.clubIds]) {
+      const c = world.clubs[id];
+      if (!c?.affiliateOf) continue;
+      const parent = world.clubs[c.affiliateOf];
+      if (!parent) continue;
+      const parentLeague = ordered.find((l) => l.id === parent.leagueId);
+      if (!parentLeague || parentLeague.tier < league.tier) continue;
+
+      const below = ordered.find((l) => l.tier === league.tier + 1);
+      if (below) {
+        league.clubIds = league.clubIds.filter((x) => x !== id);
+        below.clubIds.push(id);
+        c.leagueId = below.id;
+        summary.relegated.push({ clubId: id, from: league.name, to: below.name });
+        c.history.push({ season: game.season, year: world.year, achievement: `Moved down to ${below.name}` });
+      } else {
+        // Nowhere left to go: the reserve side folds and its players go home.
+        league.clubIds = league.clubIds.filter((x) => x !== id);
+        for (const pid of [...c.squad]) {
+          const p = world.players[pid];
+          if (!p) continue;
+          p.clubId = parent.id;
+          parent.squad.push(pid);
+        }
+        delete parent.reserveClubId;
+        delete world.clubs[id];
+        if (parent.isUserClub) {
+          news(game, 'squad', 'Reserve side disbanded',
+            `${c.name} has been wound up — with ${parent.name} in the same division there was nowhere for them to play. `
+            + 'Their players have returned to the first-team squad.');
+        }
+      }
+    }
+    // Whatever moved, the division's size and its fixture list must still agree.
+    if (league.clubIds.length !== league.teams) league.teams = league.clubIds.length;
   }
 }
 
@@ -968,6 +1298,7 @@ export function availableJobs(game) {
   const jobs = [];
   for (const club of Object.values(world.clubs)) {
     if (club.isUserClub) continue;
+    if (club.affiliateOf) continue; // nobody is hired to manage a reserve side
     const league = world.leagues.find((l) => l.id === club.leagueId);
     if (!league) continue;
     // A club will look at a manager whose standing is near their own.
@@ -1027,10 +1358,11 @@ export function rolloverSeason(game) {
 
   // Contracts: AI clubs renew or release; the user is prompted separately.
   const helpers = { renewContract, releasePlayer, contractDemand };
+
   for (const club of Object.values(world.clubs)) {
     if (club.isUserClub) continue;
     aiSquadHousekeeping(game, club, rng, helpers);
-    aiReleaseSurplus(game, club, rng, 28);
+    aiReleaseSurplus(game, club, rng, club.affiliateOf ? 24 : 28);
     // Fill gaps left by retirements and releases.
     let guard = 0;
     while (club.squad.length < 20 && guard++ < 14) {
@@ -1057,6 +1389,66 @@ export function rolloverSeason(game) {
     // Board expectations follow last season's finish.
     const league = world.leagues.find((l) => l.id === club.leagueId);
     if (league) club.board.expectation = expectationFor(club, league);
+  }
+
+  // A first team that cannot field eleven is promoted to from its own academy
+  // first. Scholars used to land straight in club.squad, which quietly padded
+  // every squad in the world; now that they have their own list, a club thinned
+  // by retirements has to be topped up deliberately - and its own youngsters are
+  // both the cheapest and the most sensible answer.
+  for (const club of Object.values(world.clubs)) {
+    // One bar for every club, reserve sides included: sixteen is an XI plus a
+    // full bench, and a division where any side cannot name one is broken.
+    const floor = 16;
+    if (club.squad.length >= floor) continue;
+    const ready = sortBy((club.youthSquad || []).map((id) => world.players[id]).filter(Boolean),
+      { key: (p) => currentAbility(p), desc: true });
+    const promoted = [];
+    const emergency = [];
+    for (const p of ready) {
+      if (club.squad.length >= floor) break;
+      club.youthSquad = club.youthSquad.filter((x) => x !== p.id);
+      club.squad.push(p.id);
+      p.clubId = club.id;
+      promoted.push(p);
+    }
+    if (promoted.length && club.isUserClub) {
+      news(game, 'youth', 'Academy players promoted',
+        `Your first-team squad had fallen to ${club.squad.length - promoted.length} players, so `
+        + `${promoted.map((p) => p.name).join(', ')} ${promoted.length === 1 ? 'has' : 'have'} been moved up `
+        + 'from the academy to make up the numbers. Sign replacements if you want them back in the youth side.');
+    }
+
+    // If the academy could not cover it, sign whoever is available. A squad too
+    // small to field eleven fit players is a broken game rather than a hard one,
+    // and the user's club is not exempt: it is skipped by the ordinary gap-fill
+    // below, so without this it is the one club that can end up unable to play.
+    let guard = 0;
+    while (club.squad.length < floor && guard++ < 12) {
+      const league = world.leagues.find((l) => l.id === club.leagueId);
+      const pos = rng.pick(['GK', 'DC', 'DL', 'DR', 'DM', 'MC', 'ML', 'MR', 'AMC', 'AML', 'AMR', 'ST']);
+      const targetCA = clamp(Math.round(abilityForReputation(club.rep) * rng.range(0.62, 0.9)), 18, 180);
+      const p = generatePlayer(rng, {
+        nationId: rng.chance(0.75) ? club.nation : rng.pick(world.nations).id,
+        pos, age: rng.int(19, 30), targetCA, targetPA: clamp(targetCA + rng.int(0, 20), targetCA, 195),
+        clubRep: club.rep, leagueRep: league?.rep ?? 55, year: world.year,
+      });
+      p.clubId = club.id;
+      p.contract = {
+        wage: Math.max(60, Math.round(estimateWage(targetCA, p.age, club.rep, 0.7) * 0.85)),
+        expiresYear: world.year + rng.int(1, 2), signedYear: world.year,
+        releaseClause: 0, goalBonus: 0, appearanceFee: 0, loanedFrom: null, loanUntilYear: null,
+      };
+      world.players[p.id] = p;
+      club.squad.push(p.id);
+      emergency.push(p);
+    }
+    if (emergency.length && club.isUserClub) {
+      news(game, 'squad', 'Emergency signings',
+        `With the squad below the minimum needed to fulfil fixtures, the club has signed `
+        + `${emergency.map((p) => p.name).join(', ')} on short contracts. They are stopgaps, not solutions.`);
+    }
+    refreshRegistration(world, club);
   }
 
   pruneFreeAgents(game, rng);

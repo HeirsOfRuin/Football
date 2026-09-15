@@ -23,6 +23,7 @@ import { newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub }
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
 import { SEASON_DAYS } from '../src/core/calendar.js';
+import { registrationLimit, refreshRegistration, buildLineup as buildXI } from '../src/engine/lineup.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 
 let passed = 0;
@@ -478,6 +479,63 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('every programme type is offered', Object.keys(PROGRAMME_TYPES).length === 4);
 }
 
+// --- Squads below the first team ---------------------------------------------
+{
+  const w2 = generateWorld({ seed: 5150, size: 'small' });
+  const clubs = Object.values(w2.clubs);
+  const reserves = clubs.filter((c) => c.affiliateOf);
+
+  check('every club has an academy list', clubs.every((c) => Array.isArray(c.youthSquad)));
+  check('reserve sides exist', reserves.length > 0, `${reserves.length} of ${clubs.length} clubs`);
+  record('reserve sides in a small world', `${reserves.length} of ${clubs.length} clubs`);
+
+  // The whole cost argument for reserve football: they take places that were
+  // held back, so the world is not one club bigger than it would have been.
+  for (const l of w2.leagues) {
+    check(`${l.name} has exactly as many clubs as its fixture list expects`,
+      l.clubIds.length === l.teams, `${l.clubIds.length} v ${l.teams}`);
+  }
+
+  // Guard rules. Each is a bug class, so each is asserted rather than assumed.
+  check('no reserve side enters a domestic cup', Object.values(w2.competitions)
+    .filter((c) => c.type === 'cup')
+    .every((c) => c.entrants.every((id) => !w2.clubs[id]?.affiliateOf)));
+  check('every reserve side sits below its parent', reserves.every((c) => {
+    const parent = w2.clubs[c.affiliateOf];
+    const cl = w2.leagues.find((l) => l.id === c.leagueId);
+    const pl = w2.leagues.find((l) => l.id === parent?.leagueId);
+    return cl && pl && cl.tier > pl.tier;
+  }));
+  check('no reserve side has a reserve side of its own', reserves.every((c) => !c.reserveClubId));
+  check('a reserve side is never offered as a job', reserves.every((c) => c.affiliateOf && !c.isUserClub));
+  check('reserve squads can field a side', reserves.every((c) => c.squad.length >= 14),
+    `smallest ${Math.min(...reserves.map((c) => c.squad.length))}`);
+  check('reserve players are on two-way contracts',
+    reserves.every((c) => c.squad.every((id) => w2.players[id].contract.wageReserve > 0)));
+  check('a reserve crest is distinguishable from its parent\'s',
+    reserves.every((c) => crestSvg(c) !== crestSvg(w2.clubs[c.affiliateOf])));
+
+  // Registration is the constraint that makes a second squad worth having.
+  const club = clubs.find((c) => !c.affiliateOf && c.status === 'professional');
+  const limit = registrationLimit(club);
+  check('registration limit follows club status', limit === 26, `${limit}`);
+  // Overfill the squad and check the surplus genuinely cannot be picked.
+  const extras = w2.freeAgents.slice(0, 6);
+  for (const id of extras) { w2.players[id].clubId = club.id; club.squad.push(id); }
+  refreshRegistration(w2, club);
+  check('registration is capped at the limit', club.registration.length === limit, `${club.registration.length}`);
+  const unregistered = club.squad.filter((id) => !club._registered.has(id));
+  check('the surplus is left unregistered', unregistered.length === club.squad.length - limit);
+  const xi = buildXI(w2, club, club.tactic);
+  const picked = [...xi.starters.filter((sl) => sl.player).map((sl) => sl.player.id), ...xi.bench.map((p) => p.id)];
+  check('an unregistered player cannot be selected',
+    picked.every((id) => !unregistered.includes(id)));
+  // ...and the ones left out are the weakest, not an arbitrary list.
+  const weakestIn = Math.min(...club.registration.map((id) => currentAbility(w2.players[id])));
+  const bestOut = Math.max(...unregistered.map((id) => currentAbility(w2.players[id])));
+  check('registration keeps the best players', weakestIn >= bestOut, `${weakestIn} in v ${bestOut} out`);
+}
+
 // --- Club identity -----------------------------------------------------------
 {
   const world = generateWorld({ seed: 606, size: 'small' });
@@ -495,14 +553,20 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   let worstGap = 360;
   let worstLeague = '';
   for (const league of world.leagues) {
-    const hues = league.clubIds.map((id) => world.clubs[id].identity.hue).sort((a, b) => a - b);
+    // Reserve sides wear their parent's colours on purpose, so they are not part
+    // of this guarantee - the affiliation is the point. They are told apart by
+    // the B on the crest and in the name instead, asserted separately below.
+    const hues = league.clubIds
+      .filter((id) => !world.clubs[id].affiliateOf)
+      .map((id) => world.clubs[id].identity.hue).sort((a, b) => a - b);
     for (let i = 1; i < hues.length; i++) {
       if (hues[i] - hues[i - 1] < worstGap) { worstGap = hues[i] - hues[i - 1]; worstLeague = league.name; }
     }
   }
   // Slots are 360/n apart with jitter of at most 0.24 of a slot either way, so
   // the closest two clubs in the largest division can be is about half a slot.
-  const biggest = Math.max(...world.leagues.map((l) => l.clubIds.length));
+  const biggest = Math.max(...world.leagues.map(
+    (l) => l.clubIds.filter((id) => !world.clubs[id].affiliateOf).length));
   const floorGap = (360 / biggest) * 0.5;
   check('no two clubs in a division share a hue', worstGap >= floorGap,
     `closest pair ${worstGap.toFixed(1)}deg in ${worstLeague}, floor ${floorGap.toFixed(1)}deg`);

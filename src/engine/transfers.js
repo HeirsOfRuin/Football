@@ -3,7 +3,7 @@
 import { clamp, remap, sortBy } from '../core/util.js';
 import { currentAbility, abilityForPosition, positionEffectiveness } from '../data/attributes.js';
 import { estimateValue, estimateWage } from '../gen/playergen.js';
-import { squadDepth } from './lineup.js';
+import { squadDepth, registrationLimit, refreshRegistration } from './lineup.js';
 import { weeklyWageBill } from './finance.js';
 import { abilityForReputation } from '../data/nations.js';
 import { expectedRole } from './training.js';
@@ -137,7 +137,9 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
   if (!to) return false;
 
   if (from) {
+    // Both lists: a player leaving a club must leave whichever one he was in.
     from.squad = from.squad.filter((id) => id !== player.id);
+    if (from.youthSquad) from.youthSquad = from.youthSquad.filter((id) => id !== player.id);
     if (fee > 0) {
       from.finances.balance += fee;
       from.finances.seasonIncome += fee;
@@ -171,6 +173,10 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
   player.unhappy = null;
   player.morale = clamp(player.morale + 12, 0, 100);
   to.squad.push(player.id);
+  // Both squads changed, so both registration caches are stale. Leaving them
+  // is how a sold player keeps turning out for his old club.
+  refreshRegistration(world, to);
+  if (from) refreshRegistration(world, from);
   assignFreeNumber(world, to, player);
 
   game.transferLog.push({
@@ -240,6 +246,12 @@ function transferIndex(game) {
     if (!p) continue;
     if (p.contract?.loanedFrom) continue;
     if (p.clubId && world.clubs[p.clubId]?.isUserClub) continue; // the user handles their own sales
+    // Scholars are not on the open market. Without this a club could "sign" a
+    // player out of another club's academy: completeTransfer would filter him
+    // from a first-team squad he was never in, and he would end up listed by two
+    // clubs at once - which is exactly what happened, four players a season,
+    // compounding every year.
+    if (p.clubId && world.clubs[p.clubId]?.youthSquad?.includes(p.id)) continue;
     const b = Math.floor(currentAbility(p) / BAND_SIZE);
     const list = bands.get(b);
     if (list) list.push(p);
@@ -297,7 +309,10 @@ function promisedRoleFor(world, club, ability) {
 /** One AI club's attempt to improve itself. Returns a completed deal or null. */
 export function aiTransferAttempt(game, club, rng) {
   const world = game.world;
-  if (club.squad.length >= 32) return null;
+  // Sized from the club's own status rather than a flat 32: an amateur side does
+  // not carry a Premier League squad, and until now every function had its own
+  // idea of how big a squad was.
+  if (club.squad.length >= registrationLimit(club) + 6) return null;
   const needs = identifyNeed(world, club);
   const top = needs.filter((n) => n.score > 2).slice(0, 4);
   if (!top.length) return null;
@@ -368,7 +383,7 @@ export function aiTransferAttempt(game, club, rng) {
 /** AI clubs offload players they do not need. */
 export function aiSquadTrim(game, club, rng) {
   const world = game.world;
-  if (club.squad.length <= 24) return null;
+  if (club.squad.length <= registrationLimit(club)) return null;
   const players = club.squad.map((id) => world.players[id]).filter(Boolean);
   const surplus = players.filter((p) => {
     const role = expectedRole(world, club, p);
@@ -384,14 +399,15 @@ export function aiSquadTrim(game, club, rng) {
  * Between seasons, clubs carrying too many bodies let the weakest go rather
  * than accumulating an endless academy backlog.
  */
-export function aiReleaseSurplus(game, club, rng, maxSquad = 28) {
+export function aiReleaseSurplus(game, club, rng, maxSquad = null) {
   const world = game.world;
-  if (club.squad.length <= maxSquad) return [];
+  const cap = maxSquad ?? registrationLimit(club) + 4;
+  if (club.squad.length <= cap) return [];
   const players = club.squad.map((id) => world.players[id]).filter(Boolean);
   const ranked = sortBy(players, { key: (p) => currentAbility(p) + (p.pa - currentAbility(p)) * 0.7 });
   const released = [];
   for (const p of ranked) {
-    if (club.squad.length <= maxSquad) break;
+    if (club.squad.length <= cap) break;
     if (p.age <= 18 && p.pa > currentAbility(p) + 35) continue; // keep the real prospects
     releasePlayer(game, p);
     released.push(p);
@@ -423,7 +439,11 @@ export function renewContract(world, player, offer) {
 export function releasePlayer(game, player) {
   const world = game.world;
   const club = world.clubs[player.clubId];
-  if (club) club.squad = club.squad.filter((id) => id !== player.id);
+  if (club) {
+    club.squad = club.squad.filter((id) => id !== player.id);
+    if (club.youthSquad) club.youthSquad = club.youthSquad.filter((id) => id !== player.id);
+    refreshRegistration(world, club);
+  }
   player.clubId = null;
   player.contract = null;
   player.squadNumber = null;

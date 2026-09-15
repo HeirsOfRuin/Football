@@ -4,6 +4,7 @@ import { FORMATIONS, defaultRoleFor, defaultDutyFor, ROLES } from '../data/tacti
 import { abilityForPosition, positionEffectiveness, currentAbility } from '../data/attributes.js';
 import { sortBy } from '../core/util.js';
 import { conditionMultiplier, roleSuitability } from './ratings.js';
+import { CLUB_STATUS } from '../data/nations.js';
 
 export function isAvailable(player) {
   return player && !player.injury && (player.suspension || 0) <= 0;
@@ -25,7 +26,9 @@ export function slotScore(player, pos, roleId) {
 export function buildLineup(world, club, tactic, opts = {}) {
   const formation = FORMATIONS[tactic.formation] || FORMATIONS['4-4-2'];
   const squad = club.squad.map((id) => world.players[id]).filter(Boolean);
-  const available = squad.filter((p) => (opts.ignoreAvailability ? true : isAvailable(p)));
+  const reg = club._registered || refreshRegistration(world, club);
+  const available = squad.filter((p) => (opts.ignoreAvailability ? true : isAvailable(p))
+    && (opts.ignoreRegistration ? true : reg.has(p.id)));
   const used = new Set();
   const starters = [];
 
@@ -87,7 +90,9 @@ export function buildLineup(world, club, tactic, opts = {}) {
 /** Auto-pick: assign the strongest available XI into the current formation. */
 export function autoPick(world, club, tactic) {
   const formation = FORMATIONS[tactic.formation] || FORMATIONS['4-4-2'];
-  const squad = club.squad.map((id) => world.players[id]).filter(isAvailable);
+  const reg = club._registered || refreshRegistration(world, club);
+  const squad = club.squad.map((id) => world.players[id])
+    .filter((p) => isAvailable(p) && reg.has(p.id));
   const used = new Set();
   const assignments = formation.slots.map((slot, i) => {
     const existing = tactic.assignments[i] || {};
@@ -159,4 +164,60 @@ export function squadDepth(world, club) {
     };
   }
   return out;
+}
+
+// --- Registration -----------------------------------------------------------
+
+/**
+ * How many players a club may register for matches, from its status.
+ *
+ * Before this, squad size meant four different things depending on which
+ * function you asked: 32 in aiTransferAttempt, 28 in aiReleaseSurplus, 24 in
+ * aiSquadTrim and another 32 in the youth intake, none of which knew about the
+ * status squad sizes the pyramid was built on. This is the one rule.
+ */
+export function registrationLimit(club) {
+  return CLUB_STATUS[club?.status]?.squadSize ?? CLUB_STATUS.professional.squadSize;
+}
+
+/**
+ * The set of players a club may pick, cached on the club the same way the
+ * pecking-order thresholds are. Call refreshRegistration whenever the squad
+ * changes; the cache is stripped before saving so it can never go stale on disk.
+ */
+export function refreshRegistration(world, club) {
+  if (!club) return new Set();
+  const limit = registrationLimit(club);
+  // A list the manager never chose is re-derived from scratch every time. The
+  // first version kept whatever was there, which meant a full auto-registered
+  // list locked out every later signing: a 117-ability arrival sat unregistered
+  // behind a 75 nobody had deliberately picked. A deliberate choice is honoured;
+  // an inherited default is not a choice.
+  const listed = club.registrationManual
+    ? (club.registration || []).filter((id) => club.squad.includes(id))
+    : [];
+
+  // Fill the remaining places by ability, so a club that never opens the screen
+  // still fields its best available side.
+  if (listed.length < limit) {
+    const rest = club.squad
+      .filter((id) => !listed.includes(id))
+      .map((id) => world.players[id])
+      .filter(Boolean)
+      .sort((a, b) => currentAbility(b) - currentAbility(a));
+    for (const p of rest) {
+      if (listed.length >= limit) break;
+      listed.push(p.id);
+    }
+  }
+  club.registration = listed.slice(0, limit);
+  club._registered = new Set(club.registration);
+  return club._registered;
+}
+
+/** Whether a player is registered to play for his club. */
+export function isRegistered(world, club, player) {
+  if (!club) return true;
+  const set = club._registered || refreshRegistration(world, club);
+  return set.has(player.id);
 }

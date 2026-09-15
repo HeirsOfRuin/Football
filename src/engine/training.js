@@ -129,9 +129,11 @@ export function developmentRate(world, club, player) {
     ? remap(club?.manager?.youthDev ?? 10, 1, 20, 0.84, 1.22)
     : 1;
   const determination = remap(player.hidden?.determination ?? player.attrs?.determination ?? 10, 1, 20, 0.82, 1.18);
-  // Under-21s play youth and reserve football that never shows in the first
-  // team's minutes, so they keep developing without being picked.
-  const minutes = (player.season?.minutes ?? 0) + (player.age <= 21 ? 850 : 0);
+  // Reserve football is real now, and its minutes are recorded like any other,
+  // so the flat 850 that used to stand in for it has gone. It was paying every
+  // under-21 in the world for games he might never have played, and it cancelled
+  // out most of the gain from actually sending him somewhere he plays.
+  const minutes = player.season?.minutes ?? 0;
   const playingTime = remap(minutes, 0, 2200, 0.62, 1.28);
   const intensity = club?.trainingIntensity === 'Intense' ? 1.12 : club?.trainingIntensity === 'Light' ? 0.88 : 1;
 

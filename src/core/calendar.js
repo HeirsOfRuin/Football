@@ -47,6 +47,7 @@ export const KEY_DAYS = {
   winterWindowStart: 184,   // 1 January
   winterWindowEnd: 214,     // 31 January
   seasonEnd: 330,           // ~26 May
+  youthIntake: 268,         // ~20 March
   boardReview: 336,
   seasonRollover: 360,
 };

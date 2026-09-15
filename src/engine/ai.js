@@ -74,6 +74,8 @@ export function updateBoardConfidence(game, club, position, teams) {
 
 /** Sack the manager if confidence collapses. Returns true if a change happened. */
 export function considerSacking(game, club, rng) {
+  // Nobody sacks a reserve-team coach; the side exists at the parent's pleasure.
+  if (club.affiliateOf) return false;
   if (club.isUserClub) return false;
   const board = club.board;
   if (board.confidence > 22) return false;

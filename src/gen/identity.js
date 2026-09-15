@@ -223,6 +223,9 @@ function fieldColour(field, x, y, pal, solidTo) {
   }
 }
 
+// A reserve side's marking. Its crest is otherwise the parent's, by design.
+const B_MARK = ['xxx.', 'x..x', 'xxx.', 'x..x', 'xxx.'];
+
 /** The crest as an SVG string. */
 export function crestSvg(club) {
   const id = club?.identity || fallbackIdentity(club);
@@ -273,6 +276,22 @@ export function crestSvg(club) {
       if (x < 0 || x >= GRID || y < 0 || y >= GRID || !cells[y][x]) continue;
       if (cells[y][x] === pal.trim) continue; // never punch through the outline
       cells[y][x] = pal.secondary;
+    }
+  }
+
+  // A reserve side wears its parent's colours deliberately - that is how the
+  // affiliation reads at a glance - so the letter is what tells them apart, from
+  // the parent and from each other.
+  if (club?.affiliateOf) {
+    const my = GRID - B_MARK.length - 2;
+    const mx = GRID - B_MARK[0].length - 3;
+    for (let sy = 0; sy < B_MARK.length; sy++) {
+      for (let sx = 0; sx < B_MARK[0].length; sx++) {
+        const x = mx + sx;
+        const y = my + sy;
+        if (!cells[y]?.[x]) continue;
+        cells[y][x] = B_MARK[sy][sx] === 'x' ? pal.trim : pal.secondary;
+      }
     }
   }
   return svgWrap(cellsToPaths(cells));
