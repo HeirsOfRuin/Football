@@ -6,6 +6,7 @@ import { clamp, remap } from '../core/util.js';
 import { currentAbility } from '../data/attributes.js';
 import { FORMATION_NAMES, MENTALITIES, defaultTactic } from '../data/tactics.js';
 import { makeManagerName } from '../gen/names.js';
+import { objectiveScore } from '../data/objectives.js';
 
 const MENTALITY_INDEX = Object.fromEntries(MENTALITIES.map((m, i) => [m, i]));
 
@@ -51,20 +52,9 @@ export function prepareAiClub(world, club, opponent, isHome, rng) {
 // --- Board confidence -------------------------------------------------------
 
 /** How the board reads a league position against its expectation. */
-export function expectationScore(expectation, position, teams) {
-  if (!expectation) return 0;
-  switch (expectation.type) {
-    case 'title': return position === 1 ? 22 : position <= 3 ? 6 : position <= 6 ? -10 : -26;
-    case 'top': return position <= expectation.target ? 16 : position <= expectation.target + 3 ? 0 : -18;
-    case 'mid': return position <= expectation.target ? 12 : position <= expectation.target + 4 ? -3 : -16;
-    case 'survive': return position <= expectation.target ? 12 : -20;
-    default: return 0;
-  }
-}
-
 export function updateBoardConfidence(game, club, position, teams) {
   const board = club.board;
-  const target = 55 + expectationScore(board.expectation, position, teams) * 1.6;
+  const target = 55 + objectiveScore(board.expectation, position, teams) * 1.6;
   const financial = club.finances.balance < -club.finances.incomeEstimate * 0.3 ? -12 : club.finances.balance > 0 ? 3 : -4;
   const form = (club.form || []).reduce((a, f) => a + (f === 'W' ? 3 : f === 'D' ? 0 : -3), 0);
   const drift = (target + financial + form - board.confidence) * 0.14;
@@ -96,7 +86,7 @@ export function considerSacking(game, club, rng) {
 
 /** Board verdict on the user at the end of a season. */
 export function seasonVerdict(game, club, position, teams) {
-  const score = expectationScore(club.board.expectation, position, teams);
+  const score = objectiveScore(club.board.expectation, position, teams);
   if (score >= 16) return { tone: 'delighted', text: 'The board are delighted with the campaign.' };
   if (score >= 6) return { tone: 'pleased', text: 'The board are pleased with how the season went.' };
   if (score >= -3) return { tone: 'satisfied', text: 'The board consider the season acceptable.' };

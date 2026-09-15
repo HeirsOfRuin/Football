@@ -14,18 +14,19 @@ import {
   seedContinental, continentalKnockout, openContinentalRound, sortTable, applyResultToTable,
   emptyTableRow, resolveTie, resetFixtureCounter, leagueZones,
 } from '../engine/season.js';
-import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize, ledgerEntry } from '../engine/finance.js';
+import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize, ledgerEntry, wageBudgetUsage } from '../engine/finance.js';
 import {
   trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole,
 } from '../engine/training.js';
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer } from '../engine/transfers.js';
+import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
 import { prepareAiClub, updateBoardConfidence, considerSacking, seasonVerdict, aiSquadHousekeeping, aiTrainingPlan } from '../engine/ai.js';
 import { news, matchHeadline } from '../engine/news.js';
 
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 5;
+export const GAME_VERSION = 6;
 
 export function newGame(opts = {}) {
   const {
@@ -69,6 +70,11 @@ export function newGame(opts = {}) {
     club.isUserClub = true;
     club.manager = { name: managerName, nat: managerNat, style: 'Manager', attacking: 12, defending: 12, tactical: 12, manManagement: 12, youthDev: 12, discipline: 12, reputation: 25, yearsAtClub: 0 };
     club.tactic = autoAssignSpecialists(world, club, autoPick(world, club, club.tactic));
+    // Starting a career is an appointment like any other, and comes with terms.
+    // takeOverClub sets these for a mid-career move; this is the other entry
+    // point, and without it a manager who never changed club had no contract at
+    // all - so dismissal cost the club nothing.
+    game.manager.contract = managerContract(club, world.year);
   }
 
   startSeason(game, true);
@@ -94,6 +100,9 @@ export function takeOverClub(game, clubId, managerName, managerNat) {
   game.manager.reputation = clamp(
     Math.max(game.manager.reputation, remap(club.rep, 20, 99, 12, 86) * 0.7), 1, 100,
   );
+  // Every appointment comes with terms. Until now the manager worked for nothing
+  // and could be dismissed for nothing.
+  game.manager.contract = managerContract(club, world.year);
   club.manager = {
     name: game.manager.name, nat: game.manager.nat, style: 'Manager',
     attacking: 12, defending: 12, tactical: 12, manManagement: 12,
@@ -1105,16 +1114,30 @@ export function endSeason(game) {
     club.rep = clamp(Math.round(club.rep + (target - club.rep) * 0.25), 12, 99);
   }
 
+  // Score the season's objectives. The league one has always been judged; the
+  // cup run and the board's remit were printed on a screen and never checked.
+  for (const club of Object.values(world.clubs)) {
+    if (club.affiliateOf) continue;
+    scoreObjectives(game, club);
+  }
+
   const user = userClub(game);
   if (user) {
     const league = world.leagues.find((l) => l.id === user.leagueId);
     const verdict = seasonVerdict(game, user, user.lastFinish, league?.teams ?? 20);
     summary.userVerdict = verdict;
-    // The board's patience is finite. Miss their expectation badly enough and
-    // the job goes to someone else.
-    if (user.board.confidence < 18) {
+    // The board's patience is finite. This used to be a bare threshold - under
+    // eighteen confidence and you were gone, every time, regardless of the board
+    // you were working for. It now runs the same patience roll the AI clubs have
+    // always used, so a patient board gives you another year and an impatient one
+    // does not, and the `patience` figure on the Club screen finally means
+    // something for the user too.
+    const sackRng = subRng(game.rng, `usersack:${game.season}`);
+    if (userSackRisk(user) > 0 && (user.board.confidence < SACK_CERTAIN
+      || sackRng.chance(userSackRisk(user)))) {
       summary.sacked = true;
       summary.sackedFrom = user.name;
+      summary.compensation = dismissalCompensation(game);
     }
     game.manager.history.push({
       season: game.season, year: world.year, club: user.name,
@@ -1285,10 +1308,21 @@ export function sackManager(game) {
     attacking: 12, defending: 12, tactical: 12, manManagement: 12,
     youthDev: 12, discipline: 12, reputation: club.rep - 10, yearsAtClub: 0,
   };
+  // Dismissal costs the club and pays the manager. A sacking that costs nothing
+  // is a sacking the board has no reason to think twice about.
+  const payoff = dismissalCompensation(game);
+  if (payoff > 0) {
+    club.finances.balance -= payoff;
+    ledgerEntry(club, game.day, 'Manager compensation', -payoff, 'wages');
+    game.manager.severance = (game.manager.severance || 0) + payoff;
+  }
   game.userClubId = null;
+  game.manager.contract = null;
   game.manager.reputation = clamp(game.manager.reputation - 8, 1, 100);
   news(game, 'board', 'You have been dismissed',
-    `${club.name} have terminated your contract. The board thanked you for your efforts but felt a change was needed.`);
+    `${club.name} have terminated your contract. The board thanked you for your efforts but felt a change was needed.`
+    + (payoff > 0 ? ` Your contract had time left to run, and the club settled it at ${money(payoff)}.` : ''));
+  return payoff;
 }
 
 /** Clubs that would consider hiring this manager, best first. */
@@ -1388,7 +1422,7 @@ export function rolloverSeason(game) {
     }
     // Board expectations follow last season's finish.
     const league = world.leagues.find((l) => l.id === club.leagueId);
-    if (league) club.board.expectation = expectationFor(club, league);
+    if (league) club.board.expectation = expectationFor(world, club, league);
   }
 
   // A first team that cannot field eleven is promoted to from its own academy
@@ -1456,7 +1490,7 @@ export function rolloverSeason(game) {
   const user = userClub(game);
   if (user) {
     const league = world.leagues.find((l) => l.id === user.leagueId);
-    if (league) user.board.expectation = expectationFor(user, league);
+    if (league) user.board.expectation = expectationFor(world, user, league);
     const expiring = user.squad.map((id) => world.players[id]).filter((p) => p?.contract && p.contract.expiresYear <= world.year);
     if (expiring.length) {
       news(game, 'squad', `${expiring.length} contracts expiring`,
@@ -1491,24 +1525,247 @@ function pruneFreeAgents(game, rng, keep = 160) {
   world.freeAgents = survivors;
 }
 
-function expectationFor(club, league) {
-  const finish = club.lastFinish ?? Math.ceil(league.teams / 2);
-  const bottomAsk = league.hasDivisionBelow !== false
-    ? { type: 'survive', target: league.teams - league.relegated, label: 'Avoid relegation' }
-    : { type: 'mid', target: league.teams - 2, label: 'Improve on last season' };
-  const canPromote = league.hasDivisionAbove !== false && league.tier > 1;
-  const t = (finish - 1) / Math.max(1, league.teams - 1);
-  if (league.tier === 1) {
-    if (t < 0.1) return { type: 'title', label: 'Win the league' };
-    if (t < 0.25) return { type: 'top', target: 4, label: 'Qualify for the Continental Cup' };
-    if (t < 0.5) return { type: 'top', target: Math.ceil(league.teams * 0.4), label: 'Challenge for a continental place' };
-    if (t < 0.78) return { type: 'mid', target: Math.ceil(league.teams * 0.65), label: 'Finish in mid-table' };
-    return bottomAsk;
+/**
+ * Judge each of a club's objectives against what actually happened.
+ *
+ * Every one of these was previously either unscored or unrepresented: the cup
+ * run had no objective at all, and wantsYouth / wantsAttacking were labels on
+ * the Club screen that nothing ever read as a target.
+ */
+function scoreObjectives(game, club) {
+  const world = game.world;
+  const objectives = club.board?.objectives;
+  if (!objectives?.length) return;
+  const league = world.leagues.find((l) => l.id === club.leagueId);
+  const finish = club.lastFinish ?? league?.teams ?? 20;
+
+  for (const o of objectives) {
+    if (o.id === 'league') {
+      o.met = objectiveScore(o, finish) >= 0;
+      o.detail = `Finished ${finish}`;
+    } else if (o.id === 'cup') {
+      // How far they actually went: the smallest round size they reached.
+      const cup = world.competitions[`${club.nation}_CUP`];
+      const reached = cupReachedBy(cup, club.id);
+      o.met = reached !== null && reached <= o.target;
+      o.detail = reached === null ? 'Did not enter' : `Reached the last ${reached}`;
+    } else if (o.type === 'youth') {
+      // Reserve football counts - it is the whole point of having a reserve side
+      // - but it counts at a higher bar, because a season in the fourth tier is
+      // an easier place to reach a thousand minutes than a top-flight bench.
+      const reserve = reserveSideOf(world, club);
+      const blooded = club.squad
+        .map((id) => world.players[id])
+        .filter((p) => p && p.age <= 21 && (p.season?.minutes ?? 0) >= 900).length
+        + (reserve?.squad || [])
+          .map((id) => world.players[id])
+          .filter((p) => p && p.age <= 21 && (p.season?.minutes ?? 0) >= 1800).length;
+      o.met = blooded >= o.target;
+      o.detail = `${blooded} under-21s with regular football`;
+    } else if (o.type === 'attacking') {
+      const row = league?.table?.find((r) => r.clubId === club.id);
+      const perGame = row && row.p ? row.gf / row.p : 0;
+      o.met = perGame >= o.target;
+      o.detail = `${perGame.toFixed(2)} goals a game`;
+    } else if (o.type === 'wages') {
+      const usage = wageBudgetUsage(world, club);
+      o.met = usage.pct <= o.target;
+      o.detail = `${Math.round(usage.pct * 100)}% of the wage budget`;
+    }
   }
-  if (canPromote && t < 0.15) return { type: 'top', target: league.promoted, label: 'Win promotion' };
-  if (canPromote && t < 0.4) return { type: 'top', target: league.promoted + 4, label: 'Reach the promotion play-offs' };
-  if (t < 0.78) return { type: 'mid', target: Math.ceil(league.teams * 0.6), label: 'Finish in mid-table' };
-  return bottomAsk;
+
+  // The secondary objectives move confidence, but less than the league does.
+  let bonus = 0;
+  for (const o of objectives) {
+    if (o.id === 'league' || o.met === null) continue;
+    bonus += (o.met ? 10 : -10) * (OBJECTIVE_WEIGHT[o.id] ?? 0.35);
+  }
+  club.board.confidence = clamp(club.board.confidence + bonus, 0, 100);
+}
+
+/** The smallest round a club reached in a cup, or null if they never entered. */
+function cupReachedBy(comp, clubId) {
+  if (!comp?.rounds?.length) return null;
+  let best = null;
+  for (const round of comp.rounds) {
+    const inIt = (round.ties || []).some((t) => t.home === clubId || t.away === clubId)
+      || (round.byes || []).includes(clubId);
+    if (!inIt) continue;
+    const size = (round.ties?.length || 0) * 2 + (round.byes?.length || 0);
+    if (best === null || size < best) best = size;
+  }
+  if (comp.winner === clubId) best = 1;
+  return best;
+}
+
+// --- Asking the board for something ------------------------------------------
+
+/**
+ * Things a manager can ask the board for.
+ *
+ * This is the first code in the game that ever writes to club.facilities or
+ * club.stadium: both were fixed at world generation and stayed fixed for the
+ * whole save, however well the club did. Upgrades feed straight into things that
+ * already read them - training facilities set development rate and how many
+ * individual training slots you get, youth facilities set intake quality and how
+ * precisely you can read a scholar's potential, medical shortens injuries.
+ */
+export const BOARD_REQUESTS = {
+  budget: { id: 'budget', label: 'More transfer money', help: 'Release funds for the current window.' },
+  training: { id: 'training', label: 'Upgrade the training ground', help: 'Faster development, and more individual training slots.' },
+  youth: { id: 'youth', label: 'Upgrade the youth academy', help: 'A better intake, and a clearer read on their potential.' },
+  medical: { id: 'medical', label: 'Upgrade the medical department', help: 'Shorter injuries and quicker recovery.' },
+  scouting: { id: 'scouting', label: 'Upgrade the scouting network', help: 'More accurate reports on players you do not know.' },
+  stadium: { id: 'stadium', label: 'Expand the stadium', help: 'A bigger ground, and more gate money every home game.' },
+  reserve: { id: 'reserve', label: 'Fund a reserve side', help: 'A second squad in a lower division, so fringe players get real football.' },
+};
+
+const FACILITY_KEYS = ['training', 'youth', 'medical', 'scouting'];
+
+/** What a request would cost and whether the board would say yes. */
+export function evaluateRequest(game, type) {
+  const world = game.world;
+  const club = userClub(game);
+  const def = BOARD_REQUESTS[type];
+  if (!club || !def) return { ok: false, reason: 'Unknown request.' };
+
+  const board = club.board;
+  const since = game.season - (board.lastRequestSeason ?? -99);
+  if (since < 1) {
+    return { ok: false, reason: 'You have already asked the board for something this season.', cost: 0 };
+  }
+
+  // The reserve side has its own placement rules - which division it can enter,
+  // whether the club already has one - so it keeps its own evaluator and only
+  // borrows the once-a-season limit and the shared screen.
+  if (type === 'reserve') {
+    const proposal = reserveProposal(game);
+    return {
+      ok: proposal.ok, cost: proposal.cost || 0, reason: proposal.reason,
+      detail: proposal.league ? `a second squad entering ${proposal.league}` : '',
+    };
+  }
+
+  let cost = 0;
+  let detail = '';
+  if (type === 'budget') {
+    cost = Math.round(club.finances.incomeEstimate * 0.12);
+    detail = `${money(cost)} added to the transfer budget`;
+  } else if (type === 'stadium') {
+    const add = Math.max(1500, Math.round(club.stadium.capacity * 0.18));
+    cost = Math.round(add * 2600);
+    detail = `${add.toLocaleString()} more seats`;
+  } else {
+    const level = club.facilities[type] ?? 10;
+    if (level >= 20) return { ok: false, reason: 'These facilities are already the best available.', cost: 0 };
+    cost = Math.round(380000 + level * level * 5200);
+    detail = `facilities from ${level} to ${level + 1}`;
+  }
+
+  // Three independent gates, so a refusal always has a reason you can act on.
+  if (board.confidence < 45) {
+    return { ok: false, cost, detail, reason: 'The board do not rate your work highly enough to commit money to it.' };
+  }
+  if (club.finances.balance < cost * 1.6) {
+    return { ok: false, cost, detail, reason: 'The club cannot afford it.' };
+  }
+  return { ok: true, cost, detail, reason: null };
+}
+
+/** Make the request. Returns null on success, or why it was refused. */
+export function makeRequest(game, type) {
+  const world = game.world;
+  const club = userClub(game);
+  const verdict = evaluateRequest(game, type);
+  if (!verdict.ok) return verdict.reason;
+
+  if (type === 'reserve') {
+    // foundReserveSide takes the money and writes its own inbox item.
+    const err = foundReserveSide(game);
+    if (err) return err;
+    club.board.lastRequestSeason = game.season;
+    club.board.confidence = clamp(club.board.confidence - 4, 0, 100);
+    return null;
+  }
+
+  club.board.lastRequestSeason = game.season;
+  club.finances.balance -= verdict.cost;
+  ledgerEntry(club, game.day, BOARD_REQUESTS[type].label, -verdict.cost, 'upkeep');
+
+  if (type === 'budget') {
+    club.finances.transferBudget += verdict.cost;
+  } else if (type === 'stadium') {
+    const add = Math.max(1500, Math.round(club.stadium.capacity * 0.18));
+    club.stadium.capacity += add;
+  } else {
+    club.facilities[type] = Math.min(20, (club.facilities[type] ?? 10) + 1);
+  }
+  // Asking for money is not free: the board expect a return on it.
+  club.board.confidence = clamp(club.board.confidence - 4, 0, 100);
+  news(game, 'board', 'The board agree to your request',
+    `${BOARD_REQUESTS[type].label}: ${verdict.detail}, at a cost of ${money(verdict.cost)}. `
+    + 'The board will expect to see the benefit.');
+  return null;
+}
+
+// --- Losing the job ----------------------------------------------------------
+
+/** Below this the board have stopped weighing it up. */
+const SACK_CERTAIN = 6;
+/** Above this you are safe for another year whatever the board think of you. */
+const SACK_WINDOW = 24;
+
+/**
+ * The chance the board dismiss the user at this season's review.
+ *
+ * This replaces a bare `confidence < 18`, which sacked you with certainty on one
+ * side of a line and never on the other, and ignored `board.patience` entirely -
+ * a figure printed on the Club screen that did nothing for the user. The AI
+ * clubs have always run a patience roll; this is the same idea, with the
+ * confidence scaling the flat AI version lacks, so the difference between a
+ * patient board and an impatient one is roughly three to four times the risk.
+ */
+export function userSackRisk(club) {
+  const conf = club?.board?.confidence ?? 100;
+  if (conf >= SACK_WINDOW) return 0;
+  if (conf < SACK_CERTAIN) return 1;
+  const odds = remap(club.board.patience, 20, 90, 0.85, 0.25) * remap(conf, 0, SACK_WINDOW, 1.2, 0.5);
+  return clamp(odds, 0.05, 0.97);
+}
+
+// --- The manager's own contract ----------------------------------------------
+
+/** A manager's contract at a club, sized to what the club can pay. */
+export function managerContract(club, year, years = 3) {
+  // Sized against what clubs in this world actually earn: a giant on GBP 379M of
+  // income pays about GBP 114k a week, a mid-table top-flight club around GBP
+  // 48k, a fourth-tier club about GBP 2k. The first attempt keyed off income too
+  // steeply and paid a manager GBP 659k a week, which made the compensation
+  // below a GBP 67M liability on a club with GBP 86M in the bank.
+  const wage = Math.max(700, Math.round(club.finances.incomeEstimate * 0.00029 + club.rep * 40));
+  return { wage, signedYear: year, expiresYear: year + years };
+}
+
+/** What the club owes if it dismisses the manager with time left to run. */
+export function dismissalCompensation(game) {
+  const c = game.manager?.contract;
+  if (!c) return 0;
+  const yearsLeft = Math.max(0, c.expiresYear - game.world.year);
+  // Half the remaining money: a real settlement rather than a token, and a few
+  // per cent of a club's annual income rather than a crippling one.
+  return Math.round(yearsLeft * c.wage * 52 * 0.5);
+}
+
+/**
+ * A club's objectives for the coming season. One generator, shared with world
+ * generation, so a club's ask no longer depends on whether it has ever played.
+ */
+function expectationFor(world, club, league) {
+  const finish = club.lastFinish ?? Math.ceil(league.teams / 2);
+  club.board.objectives = seasonObjectives(club, league, finish, {
+    wageUsage: wageBudgetUsage(world, club).pct,
+  });
+  return club.board.objectives[0];
 }
 
 export { sortTable, leagueZones };

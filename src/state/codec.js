@@ -6,7 +6,7 @@
 // well inside browser storage limits and makes them quick to write.
 
 import { ALL_ATTRS, HIDDEN_ATTRS } from '../data/attributes.js';
-import { GAME_VERSION } from './game.js';
+import { GAME_VERSION, managerContract } from './game.js';
 import { emptyStats } from '../gen/playergen.js';
 
 const CHAR_BASE = 48; // '0'
@@ -277,6 +277,29 @@ export function migrateSave(data) {
       club.registration = club.registration || [];
     }
   }
+  // v5 -> v6: the board ask for three things instead of one, and the manager has
+  // a contract. An older save has a single `expectation` and a manager working
+  // for nothing, so a dismissal would cost the club nothing and the Club screen
+  // would show an empty objectives list until the next rollover.
+  if (version < 6) {
+    const leagues = data.world?.leagues || [];
+    for (const id in data.world?.clubs || {}) {
+      const club = data.world.clubs[id];
+      if (!club.board || club.board.objectives?.length) continue;
+      const league = leagues.find((l) => l.id === club.leagueId);
+      if (!league) continue;
+      const finish = club.lastFinish ?? Math.ceil(league.teams / 2);
+      club.board.objectives = OBJECTIVES_MODULE.seasonObjectives(club, league, finish);
+      // The league ask a save is already being judged against stays exactly as
+      // it was; only the two new ones are added.
+      if (club.board.expectation) club.board.objectives[0] = { id: 'league', ...club.board.expectation, met: null };
+      club.board.expectation = club.board.objectives[0];
+    }
+    const userClub = data.game?.userClubId ? data.world?.clubs?.[data.game.userClubId] : null;
+    if (data.game?.manager && !data.game.manager.contract && userClub) {
+      data.game.manager.contract = managerContract(userClub, data.world.year);
+    }
+  }
   return { ...data, v: GAME_VERSION };
 }
 
@@ -328,6 +351,7 @@ export function deserialiseGame(raw) {
 // Imported lazily to avoid a cycle between the codec and the data modules.
 import * as NATION_MODULE from '../data/nations.js';
 import * as IDENTITY_MODULE from '../gen/identity.js';
+import * as OBJECTIVES_MODULE from '../data/objectives.js';
 import { personalityFor } from '../gen/playergen.js';
 import { Rng } from '../core/rng.js';
 

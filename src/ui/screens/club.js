@@ -1,9 +1,10 @@
 // Club screen: board, facilities, training and history.
 
-import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar } from '../components.js';
-import { userClub } from '../../state/game.js';
+import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar, toast } from '../components.js';
+import { userClub, BOARD_REQUESTS, evaluateRequest, makeRequest } from '../../state/game.js';
 import { showPlayer } from '../playerProfile.js';
 import { squadStrength } from '../../gen/worldgen.js';
+import { money } from '../../core/util.js';
 
 const VIEWS = [
   { id: 'overview', label: 'Overview' },
@@ -45,6 +46,14 @@ export function render(app) {
       root.querySelectorAll('[data-player]').forEach((el) => {
         el.onclick = () => showPlayer(app, el.dataset.player);
       });
+      root.querySelectorAll('[data-request]').forEach((b) => {
+        b.onclick = (e) => {
+          e.stopPropagation();
+          const err = makeRequest(app.game, b.dataset.request);
+          toast(err || 'The board agreed.');
+          app.refresh();
+        };
+      });
     },
   };
 }
@@ -65,15 +74,48 @@ function overviewView(app, club, league) {
     ['Average age', (club.squad.reduce((a, id) => a + world.players[id].age, 0) / Math.max(1, club.squad.length)).toFixed(1)],
   ])}`)}
     ${panel('Board', `${kv([
-    ['Expectation', club.board.expectation.label],
     ['Confidence', raw(`${bar(club.board.confidence)} <span class="small">${Math.round(club.board.confidence)}%</span>`)],
     ['Patience', String(Math.round(club.board.patience))],
-    ['Priority', club.board.wantsYouth ? 'Develop young players' : 'Win now'],
-    ['Style wanted', club.board.wantsAttacking ? 'Attacking football' : 'Results above all'],
+    ['Your contract', app.game.manager.contract
+    ? `${money(app.game.manager.contract.wage)}/wk to ${app.game.manager.contract.expiresYear}`
+    : 'None'],
   ])}
-    <p class="small faint" style="margin-bottom:0">The board review your position at the end of each season.
-      Sustained failure against their expectation costs you the job.</p>`)}
+    <div class="small" style="margin:10px 0 4px"><b>This season's objectives</b></div>
+    ${objectiveList(app, club)}
+    <p class="small faint" style="margin-bottom:0">All three are judged at the end of the season.
+      A patient board will give you another year; an impatient one will not.</p>`)}
+
+    ${panel('Ask the board', `${requestList(app, club)}
+      <p class="small faint" style="margin-bottom:0">One request a season. The board have to rate your work
+        and the club has to be able to afford it.</p>`)}
   </div>`;
+}
+
+/** The three objectives, with how each is going right now. */
+function objectiveList(app, club) {
+  const objectives = club.board.objectives || [club.board.expectation];
+  return `<div class="table-wrap"><table><tbody>${objectives.map((o) => {
+    if (!o) return '';
+    const mark = o.met === true ? '<span class="good">met</span>'
+      : o.met === false ? '<span class="bad">missed</span>' : '<span class="faint">in progress</span>';
+    return `<tr><td class="small">${esc(o.label)}</td>
+      <td class="small right nowrap">${o.detail ? `<span class="faint">${esc(o.detail)}</span> ` : ''}${mark}</td></tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+
+function requestList(app, club) {
+  const rows = Object.values(BOARD_REQUESTS).map((r) => {
+    const v = evaluateRequest(app.game, r.id);
+    // A greyed-out button with no explanation is the thing this screen is
+    // supposed to replace, so a refusal says what would have to change.
+    const why = v.ok ? esc(r.help) : esc(v.reason || r.help);
+    return `<tr>
+      <td class="small">${esc(r.label)}<div class="small faint">${why}</div></td>
+      <td class="small right nowrap">${v.cost ? money(v.cost) : '—'}</td>
+      <td class="right"><button class="ghost small" data-request="${esc(r.id)}" ${v.ok ? '' : 'disabled'}>Ask</button></td>
+    </tr>`;
+  });
+  return `<div class="table-wrap"><table><tbody>${rows.join('')}</tbody></table></div>`;
 }
 
 function staffView(club) {

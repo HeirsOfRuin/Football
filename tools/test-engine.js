@@ -19,11 +19,16 @@ import {
   TRAINING_FOCUSES, developmentRate, trainPlayer, trainingSlots, retrainingStep,
   applyMentoring, PROGRAMME_TYPES,
 } from '../src/engine/training.js';
-import { newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub } from '../src/state/game.js';
+import {
+  newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub,
+  takeOverClub, dismissalCompensation, evaluateRequest, makeRequest, managerContract, userSackRisk,
+} from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
 import { SEASON_DAYS } from '../src/core/calendar.js';
 import { registrationLimit, refreshRegistration, buildLineup as buildXI } from '../src/engine/lineup.js';
+import { wageBudgetUsage } from '../src/engine/finance.js';
+import { leagueObjective, cupObjective, remitObjective, objectiveScore, seasonObjectives } from '../src/data/objectives.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
 
 let passed = 0;
@@ -477,6 +482,172 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('a player his own age is not a mentor', kid2.hidden.professionalism === 6);
 
   check('every programme type is offered', Object.keys(PROGRAMME_TYPES).length === 4);
+}
+
+// --- The board ---------------------------------------------------------------
+{
+  const w3 = generateWorld({ seed: 2211, size: 'small' });
+  const clubs = Object.values(w3.clubs).filter((c) => !c.affiliateOf);
+
+  check('every club is given three objectives',
+    clubs.every((c) => c.board.objectives?.length === 3));
+  check('the league objective is the first one',
+    clubs.every((c) => c.board.objectives[0].id === 'league' && c.board.expectation === c.board.objectives[0]));
+
+  // The two generators used to disagree. One function now serves both, so the
+  // same club and division must produce the same ask from either entry point.
+  const lg = w3.leagues.find((l) => l.tier === 2);
+  for (const finish of [1, 5, 12, 20]) {
+    const a = leagueObjective(lg, finish);
+    const b = leagueObjective(lg, finish);
+    check(`objective for finish ${finish} is stable`, a.type === b.type && a.target === b.target);
+  }
+  // A division with nothing below it cannot ask a club to avoid relegation.
+  const bottom = w3.leagues.find((l) => !l.hasDivisionBelow);
+  if (bottom) {
+    check('the bottom division never asks you to avoid relegation',
+      leagueObjective(bottom, bottom.teams).type !== 'survive');
+  }
+  // ...and one with nothing above it cannot ask for promotion.
+  const topFlight = w3.leagues.find((l) => l.tier === 1);
+  check('the top flight never asks for promotion',
+    [1, 10, 20].every((f) => leagueObjective(topFlight, f).label !== 'Win promotion'));
+
+  // Scoring has to separate meeting an objective from missing it.
+  const survive = { type: 'survive', target: 17 };
+  check('meeting an objective scores better than missing it',
+    objectiveScore(survive, 15) > objectiveScore(survive, 19));
+  const title = { type: 'title', target: 1 };
+  check('winning the league scores best of all', objectiveScore(title, 1) > objectiveScore(title, 2));
+
+  // All three remit varieties have to be reachable, or one is dead code.
+  const kinds = new Set();
+  for (const c of clubs) kinds.add(remitObjective(c).type);
+  check('every remit variety occurs in a world', kinds.size === 3, [...kinds].join(','));
+
+  // A cup objective must be easier for a small club than a giant.
+  const big = cupObjective(topFlight, 1);
+  const small = cupObjective(topFlight, topFlight.teams);
+  check('the board ask more of a big club in the cup', big.target < small.target,
+    `${big.target} v ${small.target}`);
+
+  // The wage remit has to be an ask. It was measured at a flat "stay under your
+  // budget" and every club in a fresh world was already under it by a wide
+  // margin, which made it a free pass rather than an objective.
+  const spender = { board: {} };
+  const tight = remitObjective(spender, { wageUsage: 0.35 });
+  const loose = remitObjective(spender, { wageUsage: 0.92 });
+  check('the wage remit is pitched at where the club actually stands',
+    tight.target < loose.target, `${tight.target} v ${loose.target}`);
+  check('the wage remit never asks for more than the budget', loose.target <= 1);
+  check('the wage remit puts its number in the ask', /\d+%/.test(tight.label), tight.label);
+  const usages = Object.values(w3.clubs).filter((c) => !c.affiliateOf)
+    .map((c) => ({ pct: wageBudgetUsage(w3, c).pct, o: c.board.objectives[2] }))
+    .filter((r) => r.o.type === 'wages');
+  check('a wage remit exists to check', usages.length > 0);
+  const slack = usages.map((r) => r.o.target - r.pct);
+  record('wage remit headroom, tightest to loosest',
+    `${Math.min(...slack).toFixed(2)} to ${Math.max(...slack).toFixed(2)} of the budget`);
+  check('no club starts the season already past its wage remit',
+    slack.every((d) => d > 0));
+  check('no club is given a wage remit it could not possibly breach',
+    slack.every((d) => d <= 0.13), `worst headroom ${Math.max(...slack).toFixed(2)}`);
+}
+
+// --- Board requests actually change the club ---------------------------------
+{
+  const g4 = newGame({ seed: 2211, size: 'small', managerName: 'Test', clubId: null });
+  const w4 = g4.world;
+  const target = Object.values(w4.clubs).find((c) => !c.affiliateOf
+    && c.facilities.training < 17 && c.finances.balance > 1e7);
+  // Without this the whole block below can vanish silently if a seed stops
+  // producing a club that has room to upgrade and money to pay for it, and a
+  // green run would be testing nothing at all.
+  check('a club with room to improve and money to do it exists', !!target);
+  if (target) {
+    takeOverClub(g4, target.id, 'Test', 'ALB');
+    const club = userClub(g4);
+    check('a manager is given a contract', !!g4.manager.contract && g4.manager.contract.wage > 0,
+      `${g4.manager.contract?.wage}/wk`);
+    record('manager wage at a top-flight club', `${g4.manager.contract.wage}/wk`);
+    check('dismissal costs the club something', dismissalCompensation(g4) > 0);
+    // A bigger club has to be able to pay a manager more than a small one, or
+    // the wage is a decoration rather than a number the board has to find.
+    const smallest = Object.values(w4.clubs).filter((c) => !c.affiliateOf)
+      .sort((a, b) => a.rep - b.rep)[0];
+    const bigDeal = managerContract(target, w4.year);
+    const smallDeal = managerContract(smallest, w4.year);
+    check('a bigger club pays its manager more', bigDeal.wage > smallDeal.wage,
+      `${bigDeal.wage} v ${smallDeal.wage}`);
+    record('manager wage, biggest club to smallest', `${bigDeal.wage} to ${smallDeal.wage}/wk`);
+    check('a manager contract runs for whole seasons',
+      managerContract(target, w4.year, 3).expiresYear === w4.year + 3);
+
+    club.board.confidence = 20;
+    check('a distrusted manager is refused', !evaluateRequest(g4, 'training').ok);
+    club.board.confidence = 80;
+    const before = club.facilities.training;
+    const verdict = evaluateRequest(g4, 'training');
+    check('a trusted manager at a solvent club is approved', verdict.ok, verdict.reason || '');
+    // Facilities were frozen from world generation to the end of the save until
+    // now, so this is the assertion that the request does anything at all.
+    makeRequest(g4, 'training');
+    check('an approved upgrade raises the facility', club.facilities.training === before + 1,
+      `${before} -> ${club.facilities.training}`);
+    check('only one request a season', !evaluateRequest(g4, 'youth').ok);
+
+    // ...and the upgrade has to reach the thing it is supposed to affect.
+    const probe = generatePlayer(new Rng(9), { nationId: 'ALB', pos: 'MC', age: 19, targetCA: 95, targetPA: 160, clubRep: 70, leagueRep: 80 });
+    probe.season.minutes = 1500;
+    const poorClub = { ...club, facilities: { ...club.facilities, training: 4 } };
+    const richClub = { ...club, facilities: { ...club.facilities, training: 19 } };
+    check('better training facilities develop players faster',
+      developmentRate(w4, richClub, probe) > developmentRate(w4, poorClub, probe));
+
+    // A save written before this stage has one expectation and a manager on no
+    // contract at all, so without a migration a dismissal would cost the club
+    // nothing and the Club screen would show an empty objectives list until the
+    // next rollover. Build that older shape out of a current save and load it.
+    const old5 = JSON.parse(JSON.stringify(serialiseGame(g4)));
+    old5.v = 5;
+    const keptExpectation = {};
+    for (const id in old5.world.clubs) {
+      const c = old5.world.clubs[id];
+      if (!c.board) continue;
+      c.board.expectation = c.board.objectives?.[0] || c.board.expectation;
+      delete c.board.objectives;
+      keptExpectation[id] = c.board.expectation;
+    }
+    delete old5.game.manager.contract;
+    const migrated = deserialiseGame(old5);
+    const mClubs = Object.values(migrated.world.clubs).filter((c) => !c.affiliateOf && c.board);
+    // every() on an empty list is true, so say how many clubs were actually read.
+    check('the migrated save has clubs to check', mClubs.length > 100, `${mClubs.length} clubs`);
+    check('an older save gains the two new objectives',
+      mClubs.every((c) => c.board.objectives?.length === 3), 
+      `${mClubs.filter((c) => c.board.objectives?.length !== 3).length} clubs without three`);
+    check('an older save keeps the league ask it was already being judged against',
+      mClubs.every((c) => c.board.objectives[0].label === keptExpectation[c.id].label));
+    // Losing the job used to be a bare threshold: certain below 18 confidence,
+    // impossible above it, with board.patience ignored for the user entirely.
+    const risky = (conf, patience) => userSackRisk({ board: { confidence: conf, patience } });
+    check('a trusted manager is never sacked', risky(60, 20) === 0 && risky(24, 20) === 0);
+    check('a manager the board have given up on always goes', risky(2, 90) === 1);
+    check('an impatient board sacks sooner than a patient one', risky(15, 20) > risky(15, 90),
+      `${risky(15, 20).toFixed(2)} v ${risky(15, 90).toFixed(2)}`);
+    check('worse confidence means more risk at the same patience', risky(8, 45) > risky(22, 45),
+      `${risky(8, 45).toFixed(2)} v ${risky(22, 45).toFixed(2)}`);
+    // The point of the roll is that a bad season is survivable. If the odds sat
+    // near 1 across the window this would be the old certainty with extra steps.
+    check('a bad season is survivable', risky(15, 45) > 0.2 && risky(15, 45) < 0.7,
+      risky(15, 45).toFixed(2));
+    record('sacked at 15 confidence, impatient to patient board',
+      `${Math.round(risky(15, 20) * 100)}% to ${Math.round(risky(15, 90) * 100)}%`);
+
+    check('an older save gives the manager a contract',
+      migrated.manager.contract?.wage > 0 && dismissalCompensation(migrated) > 0,
+      `${migrated.manager.contract?.wage}/wk`);
+  }
 }
 
 // --- Squads below the first team ---------------------------------------------

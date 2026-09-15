@@ -31,6 +31,8 @@ export function showSeasonReview(app, summary, onContinue) {
 
       <p style="font-size:15px">${esc(summary.userVerdict?.text || '')}</p>
 
+      ${club ? objectiveVerdicts(club) : ''}
+
       ${trophies.length ? `<p class="good"><b>Silverware:</b> ${trophies.map((t) => esc(t.name)).join(', ')}</p>` : ''}
 
       <div class="grid c2">
@@ -67,14 +69,34 @@ export function showSeasonReview(app, summary, onContinue) {
 }
 
 
+/**
+ * How the three objectives were judged.
+ *
+ * This is the moment the board's asks are settled, so it is the one screen that
+ * has to show them. Without it the season review reports a single sentence of
+ * verdict and the manager never learns which of the three he missed.
+ */
+function objectiveVerdicts(club) {
+  const objectives = (club.board.objectives || []).filter((o) => o && o.met !== null);
+  if (!objectives.length) return '';
+  const met = objectives.filter((o) => o.met).length;
+  return `${panelTight(`Board objectives — ${met} of ${objectives.length} met`,
+    `<table><tbody>${objectives.map((o) => `<tr>
+      <td class="small">${esc(o.label)}</td>
+      <td class="small faint right">${esc(o.detail || '')}</td>
+      <td class="right nowrap"><span class="${o.met ? 'good' : 'bad'}">${o.met ? 'met' : 'missed'}</span></td>
+    </tr>`).join('')}</tbody></table>`)}`;
+}
+
 /** Told the board has let you go. */
-export function showSackNotice(app, clubName, onContinue) {
+export function showSackNotice(app, clubName, onContinue, payoff = 0) {
   openModal({
     title: 'Dismissed',
     narrow: true,
     body: `<p style="font-size:15px">${esc(clubName)} have relieved you of your duties.</p>
-      <p class="muted">The board set an expectation at the start of the season and concluded you were not going to meet it.
+      <p class="muted">The board set three objectives at the start of the season and concluded you were not going to meet enough of them.
       Your record follows you: your reputation determines which clubs will consider you next.</p>
+      ${payoff > 0 ? `<p class="small">Your contract had time left to run. The club settled it at <b>${money(payoff)}</b>.</p>` : ''}
       <p class="small faint">Manager reputation: ${Math.round(app.game.manager.reputation)}</p>`,
     footer: '<button class="primary" data-act="jobs">Look for work</button>',
     onMount(modal, close) {

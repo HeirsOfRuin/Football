@@ -10,6 +10,7 @@ import {
 
 export { abilityForReputation, commercialIncome };
 import { defaultTactic } from '../data/tactics.js';
+import { seasonObjectives } from '../data/objectives.js';
 import { currentAbility } from '../data/attributes.js';
 import { makeCityNamer, makeClubNamer, shortenClubName, clubCode, makeStadiumName, makeManagerName } from './names.js';
 import { generatePlayer, estimateWage, estimateValue, resetPlayerCounter, emptyStats } from './playergen.js';
@@ -473,7 +474,6 @@ export function generateWorld(opts = {}) {
         };
         const status = statusForRep(rep);
         club.finances = financesForClub(nRng, club, league, nation);
-        club.board.expectation = boardExpectation(i, league.teams, league.tier, league.hasDivisionBelow);
 
         // --- Squad ---
         const baseCA = abilityForReputation(rep);
@@ -499,10 +499,20 @@ export function generateWorld(opts = {}) {
           club.squad.push(player.id);
         }
         assignSquadNumbers(nRng, club, world);
+        const wageBill = club.squad.reduce((a, id) => a + world.players[id].contract.wage, 0);
         club.finances.wageBudgetAnnual = Math.max(
           club.finances.wageBudgetAnnual,
-          Math.round(club.squad.reduce((a, id) => a + world.players[id].contract.wage, 0) * 52 * 1.08),
+          Math.round(wageBill * 52 * 1.08),
         );
+
+        // Objectives are set last because the wage remit is pitched against the
+        // club's actual bill, which does not exist until the squad does. Rank in
+        // the reputation order stands in for last season's finish. One generator
+        // for both this path and the season rollover, which used to disagree.
+        club.board.objectives = seasonObjectives(club, league, i + 1, {
+          wageUsage: wageBill / Math.max(1, club.finances.wageBudgetAnnual / 52),
+        });
+        club.board.expectation = club.board.objectives[0];
 
         league.clubIds.push(club.id);
         world.clubs[club.id] = club;
@@ -541,25 +551,6 @@ export function generateWorld(opts = {}) {
   buildCompetitions(world, rng);
   world.rngState = rng.save();
   return world;
-}
-
-function boardExpectation(rankIndex, teams, tier, canRelegate = true) {
-  const t = rankIndex / Math.max(1, teams - 1);
-  // Nothing below to fall into, so survival is not a thing the board can ask for.
-  const bottomAsk = canRelegate
-    ? { type: 'survive', target: teams - 3, label: 'Avoid relegation' }
-    : { type: 'mid', target: teams - 2, label: 'Improve on last season' };
-  if (tier === 1) {
-    if (t < 0.1) return { type: 'title', label: 'Win the league' };
-    if (t < 0.25) return { type: 'top', target: 4, label: 'Qualify for the Continental Cup' };
-    if (t < 0.5) return { type: 'top', target: Math.ceil(teams * 0.4), label: 'Challenge for a continental place' };
-    if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.65), label: 'Finish in mid-table' };
-    return bottomAsk;
-  }
-  if (t < 0.2) return { type: 'top', target: 2, label: 'Win promotion' };
-  if (t < 0.45) return { type: 'top', target: 6, label: 'Reach the promotion play-offs' };
-  if (t < 0.75) return { type: 'mid', target: Math.ceil(teams * 0.6), label: 'Finish in mid-table' };
-  return bottomAsk;
 }
 
 const NUMBER_PRIORITY = {

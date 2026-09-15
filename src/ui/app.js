@@ -295,9 +295,9 @@ export const app = {
     showSeasonReview(this, summary, () => {
       if (summary.sacked) {
         const from = summary.sackedFrom;
-        sackManager(game);
+        const payoff = sackManager(game);
         rolloverSeason(game);
-        showSackNotice(this, from, () => this.openJobMarket());
+        showSackNotice(this, from, () => this.openJobMarket(), payoff);
         return;
       }
       rolloverSeason(game);
