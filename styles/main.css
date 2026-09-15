@@ -19,6 +19,10 @@
   --radius: 6px;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
   --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  /* Native controls - selects, scrollbars, pickers - follow this, so without it
+     a dark interface renders light dropdowns on a dark ground. It also overrides
+     a host page that has declared itself light before this stylesheet loads. */
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }

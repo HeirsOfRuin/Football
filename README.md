@@ -32,6 +32,11 @@ HTTPS it runs with no network at all — worlds generate, seasons play, saves pe
 Installed, it opens in its own window with no browser chrome and the same saves, which
 live in IndexedDB on that device.
 
+`artifact-index.html` is the same game packaged for a host that supplies its own
+document skeleton and expects page content rather than a full document. `index.html`
+stays the real entry point; that file exists so a published copy has a source in the
+repository rather than only in the published copy.
+
 `npm run pwa` drives a real browser through all of that — manifest, worker, cache,
 and building a world with the network switched off. It needs Playwright, which the
 project deliberately does not depend on; it says so and exits cleanly if it is absent.

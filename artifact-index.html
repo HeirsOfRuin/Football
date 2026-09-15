@@ -1,0 +1,60 @@
+<!--
+  The same game, packaged for a host that supplies its own document skeleton.
+
+  index.html is the real entry point: a complete, standalone HTML document, which
+  is what a static host, a local server and the service worker all need. Some
+  hosts instead wrap the file they are given in their own <!doctype>/<head>/<body>
+  and expect page content only - hand them index.html and its <head> ends up
+  nested inside their <body>, where the manifest link and the meta tags are at
+  best tolerated and at worst ignored.
+
+  So this file is index.html's body, with the few <head> elements that have to
+  survive moved into it. It is deliberately a near-duplicate of twenty lines
+  rather than a build step, and it exists in the repository rather than only in a
+  published copy so that a change to one is visible beside the other.
+-->
+<title>Touchline</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="styles/main.css">
+<meta name="theme-color" content="#0d1b14">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Touchline">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%230d1b14'/><circle cx='16' cy='16' r='9' fill='none' stroke='%2338d07a' stroke-width='2.5'/><path d='M16 7v18M7 16h18' stroke='%2338d07a' stroke-width='1.5' opacity='.5'/></svg>">
+<style>
+  /* The host paints its own ground behind the page and may have declared itself
+     light before styles/main.css arrives. Both are stated here so the first
+     frame is already the game's own dark, not a white flash. */
+  :root { color-scheme: dark; background: #0b1210; }
+  html, body { height: 100%; margin: 0; background: #0b1210; color: #dfe9e4; }
+</style>
+
+<div id="app"></div>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script type="module" src="src/ui/app.js"></script>
+<script>
+// Best effort, exactly as in index.html: a service worker needs a secure context
+// and a same-origin scope, and a sandboxed host may give it neither. Only
+// offline play and the install prompt depend on it.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { scope: './' }).then((reg) => {
+      const send = () => {
+        const target = reg.active || navigator.serviceWorker.controller;
+        if (!target) return;
+        target.postMessage({
+          type: 'cache-these',
+          urls: performance.getEntriesByType('resource').map((e) => e.name)
+            .concat([location.href.split('#')[0]]),
+        });
+      };
+      send();
+      setTimeout(send, 4000);
+    }).catch(() => {});
+  });
+}
+</script>
+<noscript><p style="padding:2rem;font-family:sans-serif">Touchline needs JavaScript enabled.</p></noscript>
