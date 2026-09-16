@@ -199,6 +199,12 @@ export function completeTransfer(game, player, fromClubId, toClubId, fee, contra
     // A sell-on concession follows the player, not the deal that created it.
     sellOn: extra.sellOn || 0,
     sellOnClub: extra.sellOn && from ? from.id : null,
+    // The promised role was worth up to 33 points in `evaluateContract` - the
+    // second-largest term in whether he signs at all - and was then thrown away,
+    // so a promise made to get a signature could never be broken. It is kept
+    // now, and checked against the football he actually gets.
+    promisedRole: contract.promisedRole || null,
+    promisedYear: contract.promisedRole ? world.year : null,
   };
   player.transferStatus = 'none';
   player.unhappy = null;
@@ -562,6 +568,10 @@ export function renewContract(world, player, offer) {
     expiresYear: world.year + offer.years,
     signedYear: world.year,
     releaseClause: offer.releaseClause ?? player.contract.releaseClause ?? 0,
+    goalBonus: offer.goalBonus ?? player.contract.goalBonus ?? 0,
+    appearanceFee: offer.appearanceFee ?? player.contract.appearanceFee ?? 0,
+    promisedRole: offer.promisedRole ?? player.contract.promisedRole ?? null,
+    promisedYear: offer.promisedRole ? world.year : (player.contract.promisedYear ?? null),
   };
   player.morale = clamp(player.morale + 8, 0, 100);
   player.unhappy = null;

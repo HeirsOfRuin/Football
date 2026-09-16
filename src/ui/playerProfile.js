@@ -1,6 +1,6 @@
 // The player profile modal — reachable from every screen that lists players.
 
-import { esc, openModal, money, stars, moraleLabel, attrClass, toast, confirmDialog, kv, raw } from './components.js';
+import { esc, openModal, money, stars, moraleLabel, attrClass, toast, confirmDialog, kv, raw, UNHAPPY_REASON } from './components.js';
 import { ATTR_GROUPS, ATTR_LABELS, POSITIONS, POSITION_LABELS, currentAbility, abilityForPosition, familiarity, familiarityLabel } from '../data/attributes.js';
 import { TRAITS } from '../gen/playergen.js';
 import { expectedRole, ROLE_LABELS, developmentRate } from '../engine/training.js';
@@ -87,8 +87,14 @@ export function showPlayer(app, playerId, opts = {}) {
     ['Wage', contract ? `${money(contract.wage)}/week` : 'None'],
     ['Expires', contract ? `${contract.expiresYear} (${yearsLeft <= 0 ? 'this summer' : `${yearsLeft} yr`})` : '—'],
     ['Release clause', contract?.releaseClause ? money(contract.releaseClause) : 'None'],
+    ['Appearance fee', contract?.appearanceFee ? `${money(contract.appearanceFee)} a game` : 'None'],
+    ['Goal bonus', contract?.goalBonus ? `${money(contract.goalBonus)} a goal` : 'None'],
+    // What he was told when he signed, which until now was scored during the
+    // negotiation and then forgotten the moment he put pen to paper.
+    ['Promised', contract?.promisedRole ? ROLE_LABELS[contract.promisedRole] : '—'],
     ['Transfer status', p.transferStatus === 'listed' ? 'Transfer listed' : p.transferStatus === 'loanListed' ? 'Loan listed' : 'Not available'],
   ])}
+  ${p.unhappy ? `<p class="small bad" style="margin:8px 0 0">${esc(UNHAPPY_REASON[p.unhappy] || 'He is unhappy.')}</p>` : ''}
       </div></section>
 
       <section class="panel"><div class="panel-head"><h2>Best Positions</h2></div><div class="panel-body">

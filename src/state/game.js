@@ -16,7 +16,7 @@ import {
 } from '../engine/season.js';
 import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudgets, payLeaguePrize, payCompetitionPrize, ledgerEntry, wageBudgetUsage } from '../engine/finance.js';
 import {
-  trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole,
+  trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole, ROLE_LABELS,
 } from '../engine/training.js';
 import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, completeLoan, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
@@ -588,6 +588,7 @@ export function advanceDay(game) {
 
   // A monthly read on where the manager stands with the board.
   if (date.dayOfMonth === 2 && game.day > 90) checkBoardMood(game);
+  if (date.dayOfMonth === 2) checkPromises(game);
   // ...and on whether anyone else has run out of road. Without this every post
   // in the world came open in the same week of the summer and closed 28 days
   // later, which is a job market that exists for a month a year.
@@ -596,6 +597,62 @@ export function advanceDay(game) {
   if (game.day === KEY_DAYS.boardReview) return { stopped: true, reason: 'seasonReview' };
 
   return { stopped: false };
+}
+
+/**
+ * What share of the season's football each promised role is worth.
+ *
+ * Measured in minutes rather than in `expectedRole`, deliberately. That function
+ * answers "what does his ability entitle him to", which is not the promise: you
+ * can promise a key role to a player good enough for one and then never pick
+ * him, and by the ability measure nothing would have gone wrong.
+ */
+const PROMISE_MINUTES = { key: 0.6, rotation: 0.38, squad: 0.18, fringe: 0 };
+
+/**
+ * Players who were promised football and are not getting it.
+ *
+ * `promisedRole` was the second-largest term in whether a player signed and was
+ * then discarded at the moment he did, so until now the promise existed only
+ * during the negotiation. Checked from midwinter, by which point a season has
+ * said enough about who plays.
+ */
+function checkPromises(game) {
+  const world = game.world;
+  const club = userClub(game);
+  if (!club || game.day < 170) return;
+  // Minutes available so far, from the club's own games played.
+  const league = world.leagues.find((l) => l.id === club.leagueId);
+  const row = league?.table?.find((r) => r.clubId === club.id);
+  const played = row?.p ?? 0;
+  if (played < 12) return;
+  const available = played * 90;
+
+  const broken = [];
+  for (const id of club.squad) {
+    const p = world.players[id];
+    const promise = p?.contract?.promisedRole;
+    if (!promise || promise === 'fringe') continue;
+    // Only judge a promise made for this season or the one before it; a deal
+    // signed four years ago is not a live grievance.
+    if (p.contract.promisedYear && world.year - p.contract.promisedYear > 1) continue;
+    if (p.injury || p.suspension) continue;
+    const share = (p.season?.minutes ?? 0) / Math.max(1, available);
+    if (share >= PROMISE_MINUTES[promise]) {
+      if (p.unhappy === 'promise') p.unhappy = null;
+      continue;
+    }
+    if (p.unhappy === 'promise') continue; // already sulking; do not stack it
+    p.unhappy = 'promise';
+    p.morale = clamp(p.morale - 18, 0, 100);
+    broken.push({ p, promise, share });
+  }
+  if (broken.length) {
+    news(game, 'squad', `${broken.length === 1 ? 'A player is' : `${broken.length} players are`} unhappy with their game time`,
+      `${broken.map(({ p, promise, share }) => `${p.name} was promised ${ROLE_LABELS[promise].toLowerCase()} `
+        + `and has played ${Math.round(share * 100)}% of the available minutes`).join('. ')}. `
+      + 'Play them, or expect them to want away.');
+  }
 }
 
 function checkBoardMood(game) {

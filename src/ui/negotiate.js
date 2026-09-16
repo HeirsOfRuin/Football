@@ -159,6 +159,8 @@ function renderNegotiation(app, neg) {
           promisedRole: modal.querySelector('#neg-role').value,
           signingBonus: num('#neg-bonus'),
           releaseClause: num('#neg-clause'),
+          appearanceFee: num('#neg-appear'),
+          goalBonus: num('#neg-goal'),
         };
       };
 
@@ -174,7 +176,13 @@ function renderNegotiation(app, neg) {
             + `${swap ? `, of which ${money(swap)} is the ${offer.swap.length} player${offer.swap.length === 1 ? '' : 's'} you are offering` : ' in hand'}.`;
         } else {
           const eq = termsEquivalent(player, offer);
-          read.innerHTML = `He will read the package as <b class="mono">${money(eq)}</b> a week.`;
+          // Broken out, because a bonus worth two thousand a week against a
+          // hundred-and-thirty-thousand wage disappears into the rounding and
+          // reads as though it did nothing.
+          const extras = eq - termsEquivalent(player, { wage: offer.wage, years: offer.years });
+          read.innerHTML = `He will read the package as <b class="mono">${money(eq)}</b> a week`
+            + (extras > 0 ? `, of which <b class="mono">${money(extras)}</b> is the bonuses and clauses` : '')
+            + '.';
         }
       };
       modal.querySelectorAll('input, select').forEach((el) => { el.oninput = refresh; el.onchange = refresh; });
@@ -276,9 +284,16 @@ function termsControls(neg, player, last) {
       <div class="field"><label>Release clause (0 for none)</label>
         <input type="number" id="neg-clause" value="${Math.round(last.releaseClause ?? 0)}" step="500000" min="0"></div>
     </div>
+    <div class="field-row">
+      <div class="field"><label>Appearance fee</label>
+        <input type="number" id="neg-appear" value="${Math.round(last.appearanceFee ?? 0)}" step="500" min="0"></div>
+      <div class="field"><label>Goal bonus</label>
+        <input type="number" id="neg-goal" value="${Math.round(last.goalBonus ?? 0)}" step="500" min="0"></div>
+    </div>
     <p class="small faint" style="margin-bottom:0">He wants ${money(neg.demandWage)} a week${neg.wantsClause
-    ? ', and a release clause matters to him' : ''}. A signing-on fee counts toward the package,
-      so it can buy a lower weekly wage.</p>`;
+    ? ', and a release clause matters to him' : ''}. A signing-on fee, an appearance fee and a goal bonus
+      all count toward the package, so each can buy a lower weekly wage — and the last two only cost you
+      when he plays and scores.</p>`;
 }
 
 /** The deal is done on both sides — show it, then sign it. */
@@ -304,6 +319,8 @@ function showCompletion(app, neg) {
     ['Wage', `${money(t.wage)}/week for ${t.years} year${t.years > 1 ? 's' : ''}`],
     ['Signing-on fee', t.signingBonus ? money(t.signingBonus) : 'None'],
     ['Release clause', t.releaseClause ? money(t.releaseClause) : 'None'],
+    ['Appearance fee', t.appearanceFee ? `${money(t.appearanceFee)} a game` : 'None'],
+    ['Goal bonus', t.goalBonus ? `${money(t.goalBonus)} a goal` : 'None'],
     ['Promised role', ROLE_OPTIONS.find((r) => r.id === t.promisedRole)?.label || t.promisedRole],
   ])}
     <p class="small faint" style="margin-bottom:0">Both sides have agreed. Sign it and he is your player.</p>`,
@@ -323,7 +340,7 @@ function showCompletion(app, neg) {
         }
         completeTransfer(game, player, player.clubId, club.id, fee, {
           wage: t.wage, years: t.years, promisedRole: t.promisedRole,
-          releaseClause: t.releaseClause,
+          releaseClause: t.releaseClause, goalBonus: t.goalBonus, appearanceFee: t.appearanceFee,
         }, { sellOn: neg.agreed?.sellOn || 0 });
         // The signing-on fee is money out of the door now, not a label.
         if (t.signingBonus > 0) {
@@ -516,6 +533,15 @@ export function showContractDialog(app, player) {
         <div class="field"><label>Release clause (0 for none)</label>
           <input type="number" id="c-clause" value="${player.contract?.releaseClause || 0}" step="500000" min="0"></div>
       </div>
+      <div class="field-row">
+        <div class="field"><label>Appearance fee</label>
+          <input type="number" id="c-appear" value="${player.contract?.appearanceFee || 0}" step="500" min="0"></div>
+        <div class="field"><label>Goal bonus</label>
+          <input type="number" id="c-goal" value="${player.contract?.goalBonus || 0}" step="500" min="0"></div>
+        <div class="field"><label>Role you promise him</label><select id="c-role">
+          ${ROLE_OPTIONS.map((r) => `<option value="${r.id}" ${r.id === expectedRole(world, club, player) ? 'selected' : ''}>${esc(r.label)}</option>`).join('')}
+        </select></div>
+      </div>
       <div id="c-read" class="small faint"></div>
       <div id="c-feedback" class="small" style="margin-top:6px">Offer terms he will accept and he stays.</div>`,
     footer: '<button data-close>Cancel</button><button class="primary" data-act="offer">Offer contract</button>',
@@ -526,11 +552,16 @@ export function showContractDialog(app, player) {
         years: Number(modal.querySelector('#c-years').value),
         signingBonus: Math.max(0, Number(modal.querySelector('#c-bonus').value) || 0),
         releaseClause: Math.max(0, Number(modal.querySelector('#c-clause').value) || 0),
+        appearanceFee: Math.max(0, Number(modal.querySelector('#c-appear').value) || 0),
+        goalBonus: Math.max(0, Number(modal.querySelector('#c-goal').value) || 0),
+        promisedRole: modal.querySelector('#c-role').value,
       });
       const refresh = () => {
         const o = collect();
         read.innerHTML = `He will read the package as <b class="mono">${money(termsEquivalent(player, o))}</b> a week`
-          + ` against the ${money(demand.wage)} he asked for.`;
+          + ` against the ${money(demand.wage)} he asked for.`
+          + (player.unhappy === 'promise' ? ' <span class="warn">He has not had the football he was promised, '
+            + 'and will want that put right.</span>' : '');
       };
       modal.querySelectorAll('input, select').forEach((el) => { el.oninput = refresh; el.onchange = refresh; });
       refresh();
@@ -544,13 +575,13 @@ export function showContractDialog(app, player) {
         }
         const weekly = termsEquivalent(player, o);
         const agree = evaluateContract(world, player, club, {
-          wage: weekly, years: o.years, promisedRole: expectedRole(world, club, player),
+          wage: weekly, years: o.years, promisedRole: o.promisedRole,
         });
         if (!agree.accepted) {
           feedback.innerHTML = `<span class="bad">Rejected — he ${esc(agree.reason)}.</span>`;
           return;
         }
-        renewContract(world, player, { wage: o.wage, years: o.years, releaseClause: o.releaseClause });
+        renewContract(world, player, o);
         if (o.signingBonus > 0) {
           club.finances.balance -= o.signingBonus;
           club.finances.seasonSpend += o.signingBonus;

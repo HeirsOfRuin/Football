@@ -128,7 +128,29 @@ export function termsEquivalent(player, offer) {
   // does not care whether there is a way out.
   const wantsClause = (player.hidden?.ambition ?? 10) > 15;
   const clause = offer.releaseClause > 0 && wantsClause ? wage * 0.05 : 0;
-  return Math.round(wage + bonus + clause);
+  // Appearance and goal money. Both are paid for real every week - the fee in
+  // `applyMatchEffects`, the goal bonus in `game.js` - and 30% of contracts
+  // generated with the world carry one, but nothing had ever let a manager
+  // offer either, so every player the user signed had zero. A player discounts
+  // them against a wage because they are conditional on him playing and
+  // scoring, which is a risk the wage does not carry.
+  const apps = expectedAppearances(player);
+  const perWeek = (Math.max(0, offer.appearanceFee || 0) * apps) / 52;
+  const goals = expectedGoals(player, apps);
+  const goalMoney = (Math.max(0, offer.goalBonus || 0) * goals) / 52;
+  return Math.round(wage + bonus + clause + (perWeek + goalMoney) * 0.75);
+}
+
+/** Roughly how many games a year a player of this standing expects. */
+function expectedAppearances(player) {
+  return clamp(Math.round(remap(currentAbility(player), 60, 150, 20, 38)), 12, 42);
+}
+
+/** ...and how many he expects to score in them. */
+function expectedGoals(player, apps) {
+  const pos = player.positions?.[0] || 'MC';
+  const rate = pos === 'ST' ? 0.45 : /^AM/.test(pos) ? 0.28 : /^(MC|ML|MR|DM)$/.test(pos) ? 0.12 : 0.05;
+  return Math.round(apps * rate);
 }
 
 // --- Opening talks -----------------------------------------------------------
@@ -470,6 +492,8 @@ export function termsOffer(game, neg, offer) {
       promisedRole: offer.promisedRole || 'rotation',
       signingBonus: Math.max(0, offer.signingBonus || 0),
       releaseClause: Math.max(0, offer.releaseClause || 0),
+      goalBonus: Math.max(0, offer.goalBonus || 0),
+      appearanceFee: Math.max(0, offer.appearanceFee || 0),
       weekly,
     };
     pushLog(neg, 'good', `${player.name} has agreed terms.`);

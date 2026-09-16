@@ -23,6 +23,7 @@ import {
   newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub,
   takeOverClub, dismissalCompensation, evaluateRequest, makeRequest, managerContract, userSackRisk,
   availableJobs, openVacancy, closeExpiredVacancies, VACANCY_DAYS, applyInterview,
+  setRegistration,
 } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -900,6 +901,85 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     && backc.world.hallOfFame.length === wcx.hallOfFame.length);
   record('career record after one season', `${careerTotals(gcx.manager).all.matches} matches, `
     + `${gcx.manager.trophies.length} honours, ${gcx.manager.notable.length} players remembered`);
+}
+
+// --- A promise you can break, and money that only costs you when he plays ----
+{
+  const gp = newGame({ seed: 4242, size: 'small', managerName: 'Test', clubId: null });
+  const wp = gp.world;
+  const topp = wp.leagues.find((l) => l.tier === 1);
+  takeOverClub(gp, topp.clubIds[3], 'Test', 'ALB');
+  const mine = userClub(gp);
+  const seller = wp.clubs[topp.clubIds[8]];
+  const target = wp.players[seller.squad[5]];
+
+  // The promise used to be the second-biggest term in whether he signed and was
+  // then dropped by completeTransfer, so it could never be broken.
+  completeTransfer(gp, target, seller.id, mine.id, 2e6,
+    { wage: 40000, years: 3, promisedRole: 'key', goalBonus: 5000, appearanceFee: 2000 });
+  check('the promised role survives the signature', target.contract.promisedRole === 'key',
+    String(target.contract.promisedRole));
+  check('appearance and goal money survive it too',
+    target.contract.goalBonus === 5000 && target.contract.appearanceFee === 2000);
+  check('the year the promise was made is kept', target.contract.promisedYear === wp.year);
+
+  const packed = deserialiseGame(JSON.parse(JSON.stringify(serialiseGame(gp))));
+  const backP = packed.world.players[target.id];
+  check('all of it survives a save',
+    backP.contract.promisedRole === 'key' && backP.contract.goalBonus === 5000
+    && backP.contract.appearanceFee === 2000 && backP.contract.promisedYear === wp.year);
+
+  // A player valuing conditional money below a wage is the point: it only costs
+  // the club when he plays and scores, so he discounts it.
+  const bare = termsEquivalent(target, { wage: 40000, years: 3 });
+  const withApps = termsEquivalent(target, { wage: 40000, years: 3, appearanceFee: 2000 });
+  const withGoals = termsEquivalent(target, { wage: 40000, years: 3, goalBonus: 5000 });
+  check('an appearance fee is worth something', withApps > bare, `${bare} -> ${withApps}/wk`);
+  check('a goal bonus is worth something', withGoals > bare, `${bare} -> ${withGoals}/wk`);
+  check('conditional money is worth less than the same in wages',
+    withApps - bare < 2000 * 42 / 52, `${withApps - bare}/wk against a best case of ${Math.round(2000 * 42 / 52)}`);
+  // A defender does not value a goal bonus the way a striker does.
+  const st = Object.values(wp.players).find((x) => x.positions[0] === 'ST' && currentAbility(x) > 120);
+  const dc = Object.values(wp.players).find((x) => x.positions[0] === 'DC' && currentAbility(x) > 120);
+  const lift = (pl) => termsEquivalent(pl, { wage: 40000, years: 3, goalBonus: 5000 })
+    - termsEquivalent(pl, { wage: 40000, years: 3 });
+  check('a striker values a goal bonus more than a centre-back', lift(st) > lift(dc) * 2,
+    `${lift(st)}/wk against ${lift(dc)}/wk`);
+  record('goal bonus of 5k, weekly worth to a striker and a centre-back',
+    `${lift(st)} v ${lift(dc)}`);
+
+  // ...and the promise has to actually break. Play a season without picking him.
+  let guardP = 0;
+  while (gp.day < 210 && guardP++ < 260) {
+    const r = advanceDay(gp);
+    if (r.stopped && r.reason === 'userMatch') {
+      // Deregister him so he cannot be selected: the promise is about football
+      // he was given, and this is the cleanest way to give him none.
+      setRegistration(gp, mine.registration.filter((id) => id !== target.id));
+      playFixture(gp, gp.fixtures[gp.pendingMatchId]);
+      gp.status = 'idle'; gp.pendingMatchId = null;
+    }
+  }
+  check('a season was actually played', (mine.seasonRecord?.w ?? 0) + (mine.seasonRecord?.d ?? 0)
+    + (mine.seasonRecord?.l ?? 0) >= 12,
+    `${(mine.seasonRecord?.w ?? 0) + (mine.seasonRecord?.d ?? 0) + (mine.seasonRecord?.l ?? 0)} league games`);
+  check('he got no football', (target.season?.minutes ?? 0) < 400, `${target.season?.minutes ?? 0} minutes`);
+  check('a broken promise makes him unhappy', target.unhappy === 'promise', String(target.unhappy));
+  // Against the rest of the squad rather than an absolute number: morale moves
+  // on results and playing time all season, so a fixed threshold here measures
+  // how the season went as much as it measures the grievance.
+  const squadMorale = mine.squad.map((id) => wp.players[id].morale).sort((a, b) => a - b);
+  const median = squadMorale[Math.floor(squadMorale.length / 2)];
+  check('and it costs morale', target.morale < median - 8,
+    `${Math.round(target.morale)} against a squad median of ${Math.round(median)}`);
+  record('minutes before a promised key player complains', target.season?.minutes ?? 0);
+
+  // A player who is getting what he was promised must not complain, or the
+  // check is a timer rather than a judgement.
+  const happy = mine.squad.map((id) => wp.players[id])
+    .filter((x) => x.contract?.promisedRole && (x.season?.minutes ?? 0) > 1500);
+  check('nobody who is playing complains', happy.every((x) => x.unhappy !== 'promise'),
+    `${happy.filter((x) => x.unhappy === 'promise').length} of ${happy.length}`);
 }
 
 // --- A job is a job ----------------------------------------------------------

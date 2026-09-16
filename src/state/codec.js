@@ -61,6 +61,7 @@ export function packPlayer(p) {
       // existed has a nine-element array, and reading past its end gives
       // undefined, which falls back to no clause.
       p.contract.sellOn || 0, p.contract.sellOnClub || 0,
+      p.contract.promisedRole || 0, p.contract.promisedYear || 0,
     ] : null,
     ss: packStats(p.season),
     ca: p.career,
@@ -150,6 +151,7 @@ export function unpackPlayer(d) {
       goalBonus: d.ct[4], appearanceFee: d.ct[5], loanedFrom: d.ct[6] || null,
       loanUntilYear: d.ct[7] || null, wageShare: d.ct[8],
       sellOn: d.ct[9] || 0, sellOnClub: d.ct[10] || null,
+      promisedRole: d.ct[11] || null, promisedYear: d.ct[12] || null,
     } : null,
     season: unpackStats(d.ss),
     career: d.ca || { apps: 0, goals: 0, assists: 0, cleanSheets: 0, motm: 0, seasons: [] },

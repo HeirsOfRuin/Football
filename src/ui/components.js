@@ -120,6 +120,19 @@ export function ageOf(p) { return p.age; }
  * list, which is a different number from the one that leaves the account. The
  * column has to mean the same thing as the ledger.
  */
+/**
+ * Why a player is sulking.
+ *
+ * `unhappy` is a string with a reason in it, and every screen treated it as a
+ * boolean, so a player's morale would fall and nothing said what had happened.
+ * An unexplained state reads as a broken one from the other side of the screen.
+ */
+export const UNHAPPY_REASON = {
+  demoted: 'Sent to the reserves against his will, and still on his full wage.',
+  unregistered: 'Left out of the registered squad, and good enough to expect better.',
+  promise: 'Promised more football than he has been given.',
+};
+
 export function wagePaidHere(p) {
   if (!p.contract) return 0;
   if (p.contract.loanedFrom && p.contract.wageShare != null) {
@@ -135,7 +148,8 @@ export function playerRow(world, p, opts = {}) {
   return `<tr class="clickable" data-player="${esc(p.id)}">
     <td class="num faint">${p.squadNumber ?? ''}</td>
     <td class="nowrap">${esc(p.name)}${p.custom ? ' <span class="pill info" title="Created in your player library">C</span>' : ''}${
-  p.contract?.loanedFrom ? ` <span class="pill warn" title="On loan from ${esc(world.clubs[p.contract.loanedFrom]?.name || 'another club')}">Loan</span>` : ''}</td>
+  p.contract?.loanedFrom ? ` <span class="pill warn" title="On loan from ${esc(world.clubs[p.contract.loanedFrom]?.name || 'another club')}">Loan</span>` : ''}${
+  p.unhappy ? ` <span class="pill bad" title="${esc(UNHAPPY_REASON[p.unhappy] || 'He is unhappy.')}">Unhappy</span>` : ''}</td>
     <td>${posPill(p)}</td>
     <td class="num">${p.age}</td>
     <td class="nowrap faint small">${esc(nationName(world, p.nat))}</td>
