@@ -112,14 +112,6 @@ export function ratingCell(avg) {
 
 export function ageOf(p) { return p.age; }
 
-/** One row of a squad table. */
-/**
- * What this club actually pays him each week.
- *
- * A borrowed player on a split wage was showing his full wage in every squad
- * list, which is a different number from the one that leaves the account. The
- * column has to mean the same thing as the ledger.
- */
 /**
  * Why a player is sulking.
  *
@@ -133,6 +125,13 @@ export const UNHAPPY_REASON = {
   promise: 'Promised more football than he has been given.',
 };
 
+/**
+ * What this club actually pays him each week.
+ *
+ * A borrowed player on a split wage was showing his full wage in every squad
+ * list, which is a different number from the one that leaves the account. The
+ * column has to mean the same thing as the ledger.
+ */
 export function wagePaidHere(p) {
   if (!p.contract) return 0;
   if (p.contract.loanedFrom && p.contract.wageShare != null) {
@@ -141,6 +140,7 @@ export function wagePaidHere(p) {
   return p.contract.wage;
 }
 
+/** One row of a squad table. */
 export function playerRow(world, p, opts = {}) {
   const ca = currentAbility(p);
   const avg = p.season.ratingCount ? p.season.ratingSum / p.season.ratingCount : 0;
