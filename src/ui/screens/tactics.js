@@ -7,7 +7,10 @@ import {
   rolesForPosition, defaultRoleFor, defaultDutyFor, defaultTactic,
 } from '../../data/tactics.js';
 import { buildLineup, autoPick, autoAssignSpecialists, slotScore, isAvailable } from '../../engine/lineup.js';
-import { familiarity, familiarityLabel, currentAbility, POSITION_LABELS } from '../../data/attributes.js';
+import {
+  familiarity, familiarityLabel, currentAbility, POSITION_LABELS,
+  abilityForPosition, positionEffectiveness,
+} from '../../data/attributes.js';
 import { teamStrength } from '../../engine/ratings.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
@@ -77,6 +80,8 @@ export function render(app) {
                 ${p ? (p.squadNumber ?? '') : s.slot.pos}</div>
               <div class="pname">${esc(p ? p.short : '—')}</div>
               <div class="prole">${esc(role ? shortRole(role.name) : s.slot.pos)}</div>
+              ${p ? `<div class="pability" title="How good he is in this position — his ability, adjusted for how well he knows the role">${
+  Math.round(abilityForPosition(p.attrs, s.slot.pos) * positionEffectiveness(p, s.slot.pos))}</div>` : ''}
             </div>`;
   }).join('')}
           </div>

@@ -253,6 +253,9 @@ export function startSeason(game, isFirst = false) {
   game.manager.departuresSeen = game.transferLog.length;
   for (const p of Object.values(world.players)) {
     p.season = emptyStats();
+    // Before anything else touches him, so "improved by" is measured from where
+    // he actually started rather than from the first time a screen looked.
+    p.season.startCA = currentAbility(p);
     p.yellowCards = 0;
     p.suspension = 0;
     p.condition = clamp(80 + (game.rng.next() * 15), 60, 100);
@@ -386,11 +389,24 @@ export function finishFixture(game, fixture, state) {
   const bansHome = processDisciplinary(world, state.home);
   const bansAway = processDisciplinary(world, state.away);
 
-  // Serve suspensions for players who were not involved.
+  // Serve suspensions for players who were not involved, and count the games
+  // each squad member could not have played in.
+  //
+  // Without that count, "he has not had the football he was promised" is
+  // measured against every game the club played, so a player who missed three
+  // months injured comes back to find the manager blamed for minutes he was
+  // never available for. A player reported exactly that.
   for (const club of [home, away]) {
     for (const id of club.squad) {
       const p = world.players[id];
-      if (p && p.suspension > 0 && !state.home.records[id] && !state.away.records[id]) p.suspension--;
+      if (!p) continue;
+      const involved = state.home.records[id] || state.away.records[id];
+      if (p.suspension > 0 && !involved) {
+        p.suspension--;
+        p.season.unavailable = (p.season.unavailable || 0) + 1;
+      } else if (p.injury && !involved) {
+        p.season.unavailable = (p.season.unavailable || 0) + 1;
+      }
     }
   }
 
@@ -626,7 +642,6 @@ function checkPromises(game) {
   const row = league?.table?.find((r) => r.clubId === club.id);
   const played = row?.p ?? 0;
   if (played < 12) return;
-  const available = played * 90;
 
   const broken = [];
   for (const id of club.squad) {
@@ -636,8 +651,15 @@ function checkPromises(game) {
     // Only judge a promise made for this season or the one before it; a deal
     // signed four years ago is not a live grievance.
     if (p.contract.promisedYear && world.year - p.contract.promisedYear > 1) continue;
-    if (p.injury || p.suspension) continue;
-    const share = (p.season?.minutes ?? 0) / Math.max(1, available);
+    // Games he was actually available for, not games the club played. A man out
+    // for half a season has not been snubbed, and the first version of this
+    // check only skipped players who happened to be injured at the moment it
+    // ran - so anyone back from a long lay-off was judged on minutes he could
+    // never have played.
+    const missed = p.season?.unavailable ?? 0;
+    const couldPlay = played - missed;
+    if (couldPlay < 10) continue;
+    const share = (p.season?.minutes ?? 0) / Math.max(1, couldPlay * 90);
     if (share >= PROMISE_MINUTES[promise]) {
       if (p.unhappy === 'promise') p.unhappy = null;
       continue;
@@ -1362,7 +1384,7 @@ function applyPromotionRelegation(game, summary, rng) {
       // Automatic promotion, then a play-off for the final place.
       const autoUp = eligibleUp.slice(0, Math.max(0, lower.promoted - 1)).map((r) => r.clubId);
       const playoffPool = eligibleUp.slice(Math.max(0, lower.promoted - 1), Math.max(0, lower.promoted - 1) + 4).map((r) => r.clubId);
-      const playoffWinner = resolvePlayoff(game, playoffPool, rng);
+      const playoffWinner = resolvePlayoff(game, playoffPool, rng, lower);
       const goingUp = [...autoUp, playoffWinner].filter(Boolean).slice(0, upper.relegated);
 
       for (const id of goingDown) {
@@ -1442,7 +1464,16 @@ function enforceReserveSeparation(game, ordered, summary) {
   }
 }
 
-function resolvePlayoff(game, poolIds, rng) {
+/**
+ * The play-off for the last promotion place.
+ *
+ * `league` is a parameter because it has to be. The honour line below once read
+ * `${league.name}` in a function that had no `league` in scope, which threw a
+ * ReferenceError the moment a user's club won a play-off - and because it threw
+ * inside endSeason, the interface left Continue greyed out with no message and
+ * no fixtures. A player lost a career to it at the end of his second season.
+ */
+function resolvePlayoff(game, poolIds, rng, league) {
   if (poolIds.length < 2) return poolIds[0] || null;
   const world = game.world;
   let remaining = [...poolIds];
@@ -1463,7 +1494,7 @@ function resolvePlayoff(game, poolIds, rng) {
   if (winner) {
     winner.history.push({ season: game.season, year: world.year, achievement: 'Won the promotion play-offs' });
     if (winner.isUserClub) {
-      addHonour(game, { kind: 'playoff', name: `${league.name} play-offs`, club: winner.name });
+      addHonour(game, { kind: 'playoff', name: `${league?.name || 'Promotion'} play-offs`, club: winner.name });
     }
   }
   return remaining[0];

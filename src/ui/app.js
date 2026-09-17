@@ -234,22 +234,31 @@ export const app = {
     let steps = 0;
     let outcome = null;
     const maxSkip = this.settings.dayAtATime ? 1 : 21;
-    while (steps < 400) {
-      const result = advanceDay(game);
-      steps++;
-      if (result.stopped) { outcome = result; break; }
-      if (game.day >= SEASON_DAYS - 1) { outcome = { stopped: true, reason: 'seasonRollover' }; break; }
-      if (steps >= maxSkip) break;
-      // Stop for anything the manager would want to act on.
-      const fresh = game.inbox.slice(0, game.inbox.length - inboxBefore);
-      if (fresh.some((n) => ['board', 'competition', 'youth'].includes(n.category) || n.offerClub)) break;
-      if ((game.offers || []).length) break;
-      const club = userClub(game);
-      const next = club ? nextFixtureFor(game, club.id) : null;
-      if (next && next.day <= game.day + 1) break;
-      if (Date.now() - t0 > 6000) break;
+    try {
+      while (steps < 400) {
+        const result = advanceDay(game);
+        steps++;
+        if (result.stopped) { outcome = result; break; }
+        if (game.day >= SEASON_DAYS - 1) { outcome = { stopped: true, reason: 'seasonRollover' }; break; }
+        if (steps >= maxSkip) break;
+        // Stop for anything the manager would want to act on.
+        const fresh = game.inbox.slice(0, game.inbox.length - inboxBefore);
+        if (fresh.some((n) => ['board', 'competition', 'youth'].includes(n.category) || n.offerClub)) break;
+        if ((game.offers || []).length) break;
+        const club = userClub(game);
+        const next = club ? nextFixtureFor(game, club.id) : null;
+        if (next && next.day <= game.day + 1) break;
+        if (Date.now() - t0 > 6000) break;
+      }
+    } catch (err) {
+      this.reportFailure('advancing the calendar', err);
+      return;
+    } finally {
+      // In a finally, and this is the whole point. `busy` disables Continue, so
+      // any throw between setting it and clearing it left the button greyed out
+      // for good, with no message and no way back - a save that simply stopped.
+      this.busy = false;
     }
-    this.busy = false;
 
     if (outcome?.reason === 'userMatch') {
       this.startMatch(game.fixtures[game.pendingMatchId]);
@@ -292,21 +301,66 @@ export const app = {
       }
       if (r.stopped && r.reason === 'seasonRollover') break;
     }
-    const summary = endSeason(game);
-    this.busy = false;
+    let summary;
+    try {
+      summary = endSeason(game);
+    } catch (err) {
+      this.reportFailure('closing the season', err);
+      return;
+    } finally {
+      this.busy = false;
+    }
     const { showSeasonReview, showSackNotice, showJobMarket } = await import('./screens/seasonreview.js');
     showSeasonReview(this, summary, () => {
-      if (summary.sacked) {
-        const from = summary.sackedFrom;
-        const payoff = sackManager(game);
+      try {
+        if (summary.sacked) {
+          const from = summary.sackedFrom;
+          const payoff = sackManager(game);
+          rolloverSeason(game);
+          showSackNotice(this, from, () => this.openJobMarket(), payoff);
+          return;
+        }
         rolloverSeason(game);
-        showSackNotice(this, from, () => this.openJobMarket(), payoff);
+      } catch (err) {
+        this.reportFailure('starting the new season', err);
         return;
       }
-      rolloverSeason(game);
       this.go('dashboard');
       this.autosave();
       toast(`Welcome to the ${game.world.year}/${String(game.world.year + 1).slice(2)} season.`);
+    });
+  },
+
+  /**
+   * Something threw where the game cannot carry on.
+   *
+   * It says so, instead of leaving a dead Continue button and a season with no
+   * fixtures in it, and it offers the save file - whatever went wrong, the
+   * career up to that point is still in memory and worth getting out.
+   */
+  reportFailure(doing, err) {
+    this.busy = false;
+    console.error(err);
+    openModal({
+      title: 'Something went wrong',
+      narrow: true,
+      body: `<p>Touchline hit a problem while ${esc(doing)}, and has stopped rather than carry on
+          with a half-finished season.</p>
+        <p class="small faint mono" style="white-space:pre-wrap">${esc(err?.message || String(err))}</p>
+        <p class="small">Export the save and it can be looked at. Reloading will take you back to your
+          last autosave, which should be shortly before this happened.</p>`,
+      footer: `<button data-act="export">Export save</button>
+        <button class="primary" onclick="location.reload()">Reload</button>`,
+      onMount: (modal) => {
+        modal.querySelector('[data-act="export"]').onclick = () => {
+          try {
+            exportGameFile(this.game);
+            toast('Save file downloaded.');
+          } catch (e) {
+            toast(`Could not export: ${e.message}`, 'bad', 6000);
+          }
+        };
+      },
     });
   },
 

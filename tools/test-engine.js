@@ -23,7 +23,7 @@ import {
   newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub,
   takeOverClub, dismissalCompensation, evaluateRequest, makeRequest, managerContract, userSackRisk,
   availableJobs, openVacancy, closeExpiredVacancies, VACANCY_DAYS, applyInterview,
-  setRegistration,
+  setRegistration, sackManager,
 } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -903,6 +903,117 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     + `${gcx.manager.trophies.length} honours, ${gcx.manager.notable.length} players remembered`);
 }
 
+// --- A free agent is a lifeline, not a cheat code -----------------------------
+{
+  const wfa = generateWorld({ seed: 4242, size: 'small' });
+  const pool = wfa.freeAgents.map((id) => wfa.players[id]).filter(Boolean);
+  check('there is a free agent pool', pool.length > 20, `${pool.length}`);
+  const best = Math.max(...pool.map(currentAbility));
+  const topFlight = wfa.leagues.find((l) => l.tier === 1 && l.nation === 'ALB');
+  const second = wfa.leagues.find((l) => l.tier === 2 && l.nation === 'ALB');
+  const weakestTop = Math.min(...topFlight.clubIds.map((id) => squadStrength(wfa, wfa.clubs[id])));
+  const weakestSecond = Math.min(...second.clubIds.map((id) => squadStrength(wfa, wfa.clubs[id])));
+
+  // The defect a playtester found: the best free agent in a fresh world beat
+  // the entire first XI at fifteen of twenty-two second-tier clubs, for nothing.
+  check('the best free agent cannot walk into a top-flight side', best < weakestTop,
+    `best free agent ${best} against the weakest top-flight XI ${Math.round(weakestTop)}`);
+  check('nor a second-tier one', best < weakestSecond,
+    `best free agent ${best} against the weakest second-tier XI ${Math.round(weakestSecond)}`);
+  record('best free agent, against the weakest XI in each of the top two tiers',
+    `${best} v ${Math.round(weakestSecond)} v ${Math.round(weakestTop)}`);
+
+  // ...but the pool still has to be worth looking at lower down, or it is just
+  // a list nobody ever clicks.
+  const third = wfa.leagues.find((l) => l.tier === 3 && l.nation === 'ALB');
+  const medianThird = [...third.clubIds.map((id) => squadStrength(wfa, wfa.clubs[id]))]
+    .sort((a, b) => a - b)[Math.floor(third.clubIds.length / 2)];
+  check('a free agent can still improve a lower-league side', best > medianThird,
+    `${best} against a median third-tier XI of ${Math.round(medianThird)}`);
+
+  // Quality follows age: nobody good is available young and free.
+  const young = pool.filter((p) => p.age <= 24).map(currentAbility);
+  const old = pool.filter((p) => p.age >= 31).map(currentAbility);
+  check('both age groups are represented', young.length > 2 && old.length > 5,
+    `${young.length} under 25, ${old.length} over 30`);
+  check('the good ones are the old ones', Math.max(...old) > Math.max(...young),
+    `best old ${Math.max(...old)}, best young ${Math.max(...young)}`);
+}
+
+// --- The season has to be able to end -----------------------------------------
+{
+  // A ReferenceError inside endSeason cost a playtester his career: the UI left
+  // Continue greyed out with no message and a season with no fixtures in it.
+  // The line only ran when the USER's club won a promotion play-off, which no
+  // test had ever made happen, so a suite of 1,500 assertions stayed green.
+  const gx = newGame({ seed: 3740, size: 'small', managerName: 'Test', clubId: null });
+  const wx = gx.world;
+  // Second tier, so promotion, the play-off and relegation are all live.
+  const second = wx.leagues.find((l) => l.tier === 2 && l.nation === 'ALB');
+  takeOverClub(gx, second.clubIds[0], 'Test', 'ALB');
+  const mine = userClub(gx);
+
+  // Put the club in a play-off place and settle the table so the play-off runs
+  // with the user in it, rather than hoping a simulated season arranges it.
+  const table = second.table;
+  table.forEach((r, i) => {
+    r.p = 38;
+    r.pts = 90 - i * 2;
+    r.w = Math.round(r.pts / 3); r.d = 0; r.l = 38 - r.w;
+    r.gf = 50; r.ga = 30;
+  });
+  const mineRow = table.find((r) => r.clubId === mine.id);
+  // Just outside automatic promotion: into the play-off pool.
+  mineRow.pts = 90 - (second.promoted - 1) * 2;
+  table.filter((r) => r.clubId !== mine.id).forEach((r, i) => {
+    r.pts = i < second.promoted - 1 ? 95 + i : 80 - i;
+  });
+  gx.day = SEASON_DAYS - 1;
+  let threw = null;
+  try {
+    endSeason(gx);
+  } catch (err) {
+    threw = err;
+  }
+  check('ending a season with the user in a play-off does not throw', !threw,
+    threw ? `${threw.message} — ${(threw.stack || '').split('\n')[1]?.trim()}` : '');
+  check('and the calendar can roll into the next season', (() => {
+    try { rolloverSeason(gx); return true; } catch { return false; }
+  })());
+  check('the new season has fixtures for the user', (() => {
+    const me = userClub(gx);
+    if (!me) return true; // sacked is a legitimate outcome, just not a crash
+    return Object.values(gx.fixtures).some((f) => f.homeId === me.id || f.awayId === me.id);
+  })());
+
+  // Every seed the hunt turned up, run end to end.
+  for (const seed of [3466, 3740]) {
+    const g = newGame({ seed, size: 'small', managerName: 'Test', clubId: null });
+    const lg = g.world.leagues.find((l) => l.tier === 2 && l.nation === 'ALB');
+    takeOverClub(g, lg.clubIds[3], 'Test', 'ALB');
+    let died = null;
+    try {
+      for (let s = 0; s < 4; s++) {
+        let guard = 0;
+        while (g.day < SEASON_DAYS - 1 && guard++ < 420) {
+          const r = advanceDay(g);
+          if (r.stopped && r.reason === 'userMatch') {
+            playFixture(g, g.fixtures[g.pendingMatchId]);
+            g.status = 'idle'; g.pendingMatchId = null;
+          }
+          if (r.stopped && r.reason === 'seasonRollover') break;
+        }
+        const sum = endSeason(g);
+        if (sum.sacked) { sackManager(g); rolloverSeason(g); break; }
+        rolloverSeason(g);
+      }
+    } catch (err) {
+      died = err;
+    }
+    check(`seed ${seed} plays four seasons without throwing`, !died, died?.message || '');
+  }
+}
+
 // --- A promise you can break, and money that only costs you when he plays ----
 {
   const gp = newGame({ seed: 4242, size: 'small', managerName: 'Test', clubId: null });
@@ -973,6 +1084,46 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('and it costs morale', target.morale < median - 8,
     `${Math.round(target.morale)} against a squad median of ${Math.round(median)}`);
   record('minutes before a promised key player complains', target.season?.minutes ?? 0);
+
+  // A player who missed the season injured must not resent it. A playtester hit
+  // exactly this: the first version of the check only skipped players who were
+  // injured at the moment it ran, so anyone back from a long lay-off was judged
+  // on minutes he could never have played.
+  const crocked = mine.squad.map((id) => wp.players[id]).find((x) => x.id !== target.id
+    && x.contract && !x.contract.promisedRole);
+  crocked.contract.promisedRole = 'key';
+  crocked.contract.promisedYear = wp.year;
+  crocked.season.minutes = 180;
+  crocked.season.unavailable = 30; // out for all but a couple of games
+  crocked.unhappy = null;
+  crocked.morale = 70;
+  // ...and one who was fit throughout and still barely played.
+  const benched = mine.squad.map((id) => wp.players[id]).find((x) => x.id !== target.id
+    && x.id !== crocked.id && x.contract && !x.contract.promisedRole);
+  benched.contract.promisedRole = 'key';
+  benched.contract.promisedYear = wp.year;
+  benched.season.minutes = 180;
+  benched.season.unavailable = 0;
+  benched.unhappy = null;
+  benched.morale = 70;
+  // Run the same monthly check the calendar runs. The fixture has to be played
+  // when one comes up, or advanceDay stops on it and the loop spins without the
+  // calendar moving - a harness that looks like it ran a month and ran nothing.
+  const dayBefore = gp.day;
+  for (let i = 0; i < 40; i++) {
+    const r = advanceDay(gp);
+    if (r.stopped && r.reason === 'userMatch') {
+      playFixture(gp, gp.fixtures[gp.pendingMatchId]);
+      gp.status = 'idle'; gp.pendingMatchId = null;
+    }
+    if (r.stopped && r.reason === 'seasonRollover') break;
+  }
+  check('the calendar actually moved', gp.day > dayBefore + 20, `${dayBefore} -> ${gp.day}`);
+  check('a player who was injured all season does not resent it',
+    crocked.unhappy !== 'promise',
+    `${crocked.name}: ${crocked.season.minutes} minutes, ${crocked.season.unavailable} games missed, unhappy=${crocked.unhappy}`);
+  check('a fit player who was never picked still does', benched.unhappy === 'promise',
+    `${benched.name}: unhappy=${benched.unhappy}`);
 
   // A player who is getting what he was promised must not complain, or the
   // check is a timer rather than a judgement.

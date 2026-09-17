@@ -287,15 +287,34 @@ function academyView(app, world, club) {
 
   ${panelTight('Scholars', `<div class="table-wrap"><table>
     <thead><tr><th>Player</th><th class="num">Age</th><th>Pos</th><th class="num">Ability</th>
-      <th>Potential</th><th class="right">Actions</th></tr></thead>
+      <th class="num">This season</th><th>Potential</th><th class="right">Actions</th></tr></thead>
     <tbody>${scholars.map((p) => `<tr class="clickable" data-player="${esc(p.id)}">
       <td class="nowrap">${esc(p.name)}</td>
       <td class="num">${p.age}</td>
       <td class="small faint">${esc(p.positions.join('/'))}</td>
       <td class="num">${currentAbility(p)}</td>
+      <td class="num">${growthCell(p)}</td>
       <td class="small">${esc(fogged(club, p))}</td>
       <td class="right nowrap">
         <button class="ghost small" data-promote="${esc(p.id)}">Promote</button>
         <button class="ghost small" data-release="${esc(p.id)}">Release</button>
-      </td></tr>`).join('')}</tbody></table></div>`)}`;
+      </td></tr>`).join('')}</tbody></table>
+    <p class="small faint" style="margin:8px 0 0">"This season" is how much his ability has actually moved
+      since August. A scholar who is not moving is one your coaching is not reaching.</p></div>`)}`;
+}
+
+/**
+ * How much a player's ability has moved this season.
+ *
+ * The academy said nothing about whether anyone in it was developing, which is
+ * the one question it exists to answer - a playtester raised it about both this
+ * screen and the training one, so both read the same measured number.
+ */
+function growthCell(p) {
+  const start = p.season?.startCA || 0;
+  if (!start) return '<span class="faint" title="Arrived after the season began">—</span>';
+  const delta = currentAbility(p) - start;
+  if (delta > 0) return `<span class="good">+${delta}</span>`;
+  if (delta < 0) return `<span class="bad">${delta}</span>`;
+  return '<span class="faint">0</span>';
 }

@@ -532,13 +532,33 @@ export function generateWorld(opts = {}) {
   assignReserveSides(world, subRng(rng, 'reserves'), year);
 
   // Free agents — a pool of unattached professionals for emergencies.
+  //
+  // Quality follows age, because that is what being available on a free
+  // actually means. A good young player has a club; a good old one may not.
+  // The previous curve drew ability independently of age from a single
+  // distribution, and a playtester found the result straight away: the best
+  // free agent in a new world was 117, better than the entire first XI at
+  // fifteen of twenty-two second-tier clubs and at every club in the bottom
+  // three divisions, for nothing. Signing one was the strongest move in the
+  // game and it cost a transfer fee of zero.
+  //
+  // So the ceiling now rises with age and the genuinely useful ones are old
+  // enough to be a one- or two-season fix rather than a free superstar.
+  const FREE_AGENT_BANDS = [
+    // maxAge, mean, sd, floor, ceiling
+    [24, 44, 10, 25, 68],
+    [30, 54, 12, 28, 86],
+    [34, 63, 14, 30, 100],
+    [38, 60, 16, 28, 108],
+  ];
   const faRng = subRng(rng, 'freeagents');
   const faCount = Math.round(nationIds.length * 14);
   for (let i = 0; i < faCount; i++) {
     const natId = faRng.pick(nationIds);
     const pos = faRng.pick(SQUAD_TEMPLATE);
     const age = faRng.chance(0.45) ? faRng.int(31, 37) : faRng.int(19, 30);
-    const targetCA = clamp(Math.round(faRng.normalClamped(72, 18, 30, 135)), 25, 140);
+    const band = FREE_AGENT_BANDS.find(([maxAge]) => age <= maxAge) || FREE_AGENT_BANDS.at(-1);
+    const targetCA = clamp(Math.round(faRng.normalClamped(band[1], band[2], band[3], band[4])), 25, 140);
     const p = generatePlayer(faRng, {
       nationId: natId, pos, age, targetCA, targetPA: rollPotential(faRng, natId, 45, age, targetCA),
       clubRep: 45, leagueRep: 55, year,

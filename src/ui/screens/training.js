@@ -42,6 +42,24 @@ function describeSlot(world, slot) {
   return p.name;
 }
 
+/**
+ * What has actually happened to a player's ability this season.
+ *
+ * Every development figure on this screen was a forecast - a rate, a trajectory
+ * label - and none of them said whether anyone had got better, which a
+ * playtester noticed straight away. This is the measured thing.
+ */
+function growthCell(p) {
+  const start = p.season?.startCA || 0;
+  // A player signed mid-season has no start figure from this club, and a zero
+  // would read as "no progress" rather than "not known".
+  if (!start) return '<span class="faint" title="Signed after the season began">—</span>';
+  const delta = currentAbility(p) - start;
+  if (delta > 0) return `<span class="good">+${delta}</span>`;
+  if (delta < 0) return `<span class="bad">${delta}</span>`;
+  return '<span class="faint">0</span>';
+}
+
 export function render(app) {
   const game = app.game;
   const world = game.world;
@@ -100,7 +118,8 @@ export function render(app) {
 
   ${panelTight('Progress report', `<div class="table-wrap"><table>
     <thead><tr><th>Player</th><th class="num">Age</th><th class="num">Ability</th><th class="num">Potential</th>
-      <th>Trajectory</th><th>Individual work</th><th>Squad role</th><th class="num">Minutes</th></tr></thead>
+      <th class="num">This season</th><th>Trajectory</th><th>Individual work</th>
+      <th>Squad role</th><th class="num">Minutes</th></tr></thead>
     <tbody>${developing.map((p) => {
     const rate = developmentRate(world, club, p);
     const traj = rate > 0.09 ? '<span class="good">Rapid</span>' : rate > 0.045 ? '<span class="good">Improving</span>'
@@ -109,11 +128,15 @@ export function render(app) {
     return `<tr class="clickable" data-player="${esc(p.id)}">
       <td class="nowrap">${esc(p.name)}</td><td class="num">${p.age}</td>
       <td class="num">${currentAbility(p)}</td><td class="num faint">${p.pa}</td>
+      <td class="num">${growthCell(p)}</td>
       <td class="small">${traj}</td>
       <td class="small ${slot ? 'good' : 'faint'}">${slot ? esc(PROGRAMME_TYPES[slot.type]?.label || slot.type) : '—'}</td>
       <td class="small faint">${esc(ROLE_LABELS[expectedRole(world, club, p)])}</td>
       <td class="num">${p.season.minutes}</td></tr>`;
-  }).join('')}</tbody></table></div>`)}`;
+  }).join('')}</tbody></table>
+  <p class="small faint" style="margin:8px 0 0">"This season" is what has actually happened to his ability
+    since August. "Trajectory" is the rate he is developing at now, which is a forecast — a player can be
+    improving quickly and still show little, if the season is young.</p></div>`)}`;
 
   return {
     html,

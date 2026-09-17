@@ -3,7 +3,7 @@
 import { esc, panel, panelTight, badge, money, formRun, emptyState, kv, raw, shortDate, ratingCell } from '../components.js';
 import { userClub, nextFixtureFor, clubFixtures, sortTable } from '../../state/game.js';
 import { squadStrength } from '../../gen/worldgen.js';
-import { sortBy } from '../../core/util.js';
+import { sortBy, ordinal } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { wageBudgetUsage, financialHealth } from '../../engine/finance.js';
 
@@ -31,6 +31,33 @@ export function render(app) {
   const topPerformers = sortBy(squad.filter((p) => p.season.ratingCount >= 3),
     { key: (p) => p.season.ratingSum / p.season.ratingCount, desc: true }).slice(0, 5);
 
+  /**
+   * Where both sides stand, under the last-six form.
+   *
+   * The form run says what has happened lately and nothing said what the season
+   * amounts to, so a run of three defeats read the same whether you were top of
+   * the table or bottom of it.
+   */
+  const seasonLine = (a, b, tbl, lg) => {
+    const rank = (c) => {
+      const i = tbl.findIndex((r) => r.clubId === c.id);
+      return i < 0 ? null : { pos: i + 1, row: tbl[i] };
+    };
+    const side = (c) => {
+      const r = rank(c);
+      const rec = c.seasonRecord || { w: 0, d: 0, l: 0 };
+      const games = rec.w + rec.d + rec.l;
+      // The opponent may be in a different division - a cup tie - and then a
+      // position in this table would be someone else's number.
+      const place = r ? `${ordinal(r.pos)} of ${tbl.length}` : 'another division';
+      return `<b>${esc(c.short)}</b> ${place}${games ? ` · ${rec.w}W ${rec.d}D ${rec.l}L`
+        + `${r ? ` · ${r.row.pts} pts` : ''}` : ' · no games yet'}`;
+    };
+    return `<div class="row small next-match-meta" style="margin-top:6px;justify-content:space-between;gap:12px">
+      <span>${side(a)}</span><span class="right">${side(b)}</span>
+    </div>`;
+  };
+
   // A slice of the table centred on the user's club.
   const from = Math.max(0, Math.min(pos - 3, table.length - 6));
   const slice = table.slice(from, from + 6);
@@ -56,7 +83,8 @@ export function render(app) {
           <div class="row small faint next-match-meta" style="margin-top:12px;justify-content:space-between">
             <span>Squad strength ${Math.round(squadStrength(world, club))} v ${Math.round(squadStrength(world, opponent))}</span>
             <span>${esc(opponent.stadium.name)} · ${opponent.stadium.capacity.toLocaleString()}</span>
-          </div>`) : panel('Next Match', emptyState('No fixtures scheduled.'))}
+          </div>
+          ${seasonLine(club, opponent, table, league)}`) : panel('Next Match', emptyState('No fixtures scheduled.'))}
 
         ${panelTight('Inbox', unread.length === 0
     ? emptyState('Nothing new.')

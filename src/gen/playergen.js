@@ -337,6 +337,14 @@ export function emptyStats() {
     apps: 0, subApps: 0, minutes: 0, goals: 0, assists: 0, shots: 0, shotsOnTarget: 0,
     keyPasses: 0, tackles: 0, interceptions: 0, saves: 0, conceded: 0, cleanSheets: 0,
     yellow: 0, red: 0, motm: 0, ratingSum: 0, ratingCount: 0,
+    // Matches he was injured or suspended for. Judging playing time without it
+    // blames the manager for games the player could not have been picked in.
+    unavailable: 0,
+    // His ability when the season kicked off. Every development figure in the
+    // game was a forecast - a rate, a trajectory label - and nothing anywhere
+    // said whether a player had actually got better, which is the only question
+    // a training screen exists to answer.
+    startCA: 0,
   };
 }
 

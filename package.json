@@ -8,6 +8,7 @@
     "serve": "python3 -m http.server 8080",
     "test": "node tools/test-engine.js",
     "season": "node tools/sim-season.js",
-    "pwa": "node tools/pwa-check.js"
+    "pwa": "node tools/pwa-check.js",
+    "soak": "node tools/soak.js"
   }
 }
