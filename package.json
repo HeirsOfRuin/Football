@@ -9,6 +9,7 @@
     "test": "node tools/test-engine.js",
     "season": "node tools/sim-season.js",
     "pwa": "node tools/pwa-check.js",
-    "soak": "node tools/soak.js"
+    "soak": "node tools/soak.js",
+    "fatigue": "node tools/fatigue.js"
   }
 }
