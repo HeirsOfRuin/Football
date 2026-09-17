@@ -422,6 +422,40 @@ export const app = {
   },
 };
 
+/**
+ * Offer a reload when a new build has been downloaded.
+ *
+ * The service worker serves cache-first and refreshes in the background, so a
+ * pushed fix is already on disk one load before it is running. Without this a
+ * player opens the link, gets the old build, and has no way of knowing that
+ * loading it once more would fix the thing he just hit. The bar is offered
+ * rather than applied: reloading in the middle of a match would be worse than
+ * the stale build.
+ */
+function watchForUpdates() {
+  if (!('serviceWorker' in navigator)) return;
+  let shown = false;
+  // Ask, as well as listen. The worker can find the new build before this file
+  // has finished running, and a message sent then reaches nobody.
+  const ask = () => navigator.serviceWorker.controller?.postMessage({ type: 'update-status' });
+  navigator.serviceWorker.addEventListener('controllerchange', ask);
+  ask();
+  setTimeout(ask, 3000);
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data?.type !== 'update-ready' || shown) return;
+    shown = true;
+    const bar = document.createElement('div');
+    bar.className = 'update-bar';
+    bar.innerHTML = '<span>A newer version of Touchline has been downloaded.</span>'
+      + '<button class="sm primary" data-reload>Reload</button>'
+      + '<button class="sm ghost" data-later>Later</button>';
+    bar.querySelector('[data-reload]').onclick = () => location.reload();
+    bar.querySelector('[data-later]').onclick = () => bar.remove();
+    document.body.appendChild(bar);
+  });
+}
+
 window.__touchline = app;
 app.bindKeys();
 app.render();
+watchForUpdates();

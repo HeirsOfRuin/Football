@@ -31,6 +31,8 @@ try {
   process.exit(0);
 }
 
+import { readFile, writeFile } from 'node:fs/promises';
+
 const PORT = process.argv[2] || 8080;
 const BASE = `http://localhost:${PORT}`;
 const EXEC = process.env.CHROMIUM || undefined;
@@ -112,6 +114,31 @@ const played = await offlinePage.evaluate(async () => {
 });
 line('it plays with the network off', !played.error,
   played.error || `built ${played.clubs} clubs and ${played.players.toLocaleString()} players offline`);
+// Does a pushed fix actually reach someone who already has the app?
+//
+// Serving is cache-first, so the answer is not automatic: the new build lands
+// in the cache during one visit and only runs on the next. Two things here have
+// already been wrong and neither failed loudly - the background refresh fetched
+// with the page's own conditional headers and got a 304, so it refreshed
+// nothing at all; and the worker announced the new build before the page was
+// listening. Both were intermittent. So this drives the real sequence: change a
+// file the app has cached, load the page, and expect to be told.
+await ctx.setOffline(false);
+const cssPath = new URL('../styles/main.css', import.meta.url);
+const cssBefore = await readFile(cssPath, 'utf8');
+let updateOffered = false;
+try {
+  await writeFile(cssPath, `${cssBefore}\n/* pwa-check build marker */\n`);
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForSelector('.update-bar', { timeout: 20000 }).catch(() => {});
+  updateOffered = (await page.locator('.update-bar').count()) === 1;
+} finally {
+  await writeFile(cssPath, cssBefore);
+}
+line('a new build offers itself to an existing player', updateOffered,
+  updateOffered ? 'cache-first, so the fix is downloaded one load before it runs'
+    : 'the update bar never appeared after a cached file changed');
+
 line('nothing threw', pageErrors.length === 0 && offlineErrors.length === 0,
   [...pageErrors, ...offlineErrors].join('; '));
 

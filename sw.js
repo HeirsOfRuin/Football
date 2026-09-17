@@ -47,6 +47,17 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
   if (event.data === 'skipWaiting') { self.skipWaiting(); return; }
+  // The page asking whether it missed the announcement below.
+  //
+  // A page's stylesheet is requested before its scripts have run, so the
+  // revalidation that spots a new build can finish before anything is listening
+  // for the result. Measured: the bar appeared on some runs and not others. The
+  // page asks once on start-up rather than the worker shouting into an empty
+  // room.
+  if (event.data?.type === 'update-status') {
+    if (announced) event.source?.postMessage({ type: 'update-ready' });
+    return;
+  }
   // The page tells the worker what it actually loaded.
   //
   // This is here because of a measured failure: on a first visit the worker is
@@ -115,12 +126,46 @@ self.addEventListener('fetch', (event) => {
 
 async function update(req) {
   try {
-    const res = await fetch(req);
-    if (res && res.ok && res.type === 'basic') {
-      const cache = await caches.open(CACHE);
-      await cache.put(req, res.clone());
-    }
+    // `cache: 'reload'` rather than passing `req` straight through. A reload
+    // makes the browser revalidate, so the request it hands this worker already
+    // carries If-Modified-Since, the server answers 304, and `res.ok` is false -
+    // the refresh silently did nothing. Measured: the new build was picked up on
+    // some loads and not others, which is the worst version of this bug.
+    const res = await fetch(req.url, { cache: 'reload', credentials: 'same-origin' });
+    if (!res || !res.ok || res.type !== 'basic') return;
+    const cache = await caches.open(CACHE);
+    const old = await cache.match(req, { ignoreSearch: true });
+    const changed = old ? !(await sameBody(old.clone(), res.clone())) : false;
+    await cache.put(req, res.clone());
+    if (changed) announceUpdate();
   } catch {
     // Offline: the cached copy stands. Nothing to report.
   }
+}
+
+async function sameBody(a, b) {
+  try {
+    const [x, y] = await Promise.all([a.text(), b.text()]);
+    return x === y;
+  } catch {
+    // Unreadable for any reason: treat it as unchanged rather than nagging.
+    return true;
+  }
+}
+
+// Tell the page a new build has arrived.
+//
+// Serving is cache-first, which is right for a game with no backend - the
+// cached copy IS the application, not a stale view of something live. The cost
+// is that a fix reaches an existing player only on the load AFTER the one that
+// downloaded it, so a playtester on a broken build opens the link, sees the bug
+// again, and reasonably concludes nothing was fixed. Comparing the bytes here
+// is what makes that visible: the page can then offer a reload instead of the
+// player needing to know to do it twice.
+let announced = false;
+async function announceUpdate() {
+  if (announced) return;
+  announced = true;
+  const clients = await self.clients.matchAll({ type: 'window' });
+  for (const c of clients) c.postMessage({ type: 'update-ready' });
 }
