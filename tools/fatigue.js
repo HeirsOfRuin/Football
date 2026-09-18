@@ -19,7 +19,17 @@ import { SEASON_DAYS } from '../src/core/calendar.js';
 import { runMatch } from '../src/engine/match.js';
 
 const SEEDS = Number(process.argv[2] || 4);
-const INTENSITIES = ['Light', 'Normal', 'Intense'];
+
+// The last arm is the one that matters most. Your eleven is auto-picked once,
+// the day you take the job, and nothing re-picks it - so the same men start
+// every match at whatever condition they are in, while every AI club re-picks
+// before each of its own. `autoPickOnMatchday` is the setting for that.
+const ARMS = [
+  { label: 'Light', intensity: 'Light', autoPick: false },
+  { label: 'Normal', intensity: 'Normal', autoPick: false },
+  { label: 'Intense', intensity: 'Intense', autoPick: false },
+  { label: 'Intense+auto', intensity: 'Intense', autoPick: true },
+];
 
 function pct(arr, q) {
   if (!arr.length) return 0;
@@ -27,7 +37,8 @@ function pct(arr, q) {
   return s[Math.min(s.length - 1, Math.floor(q * s.length))];
 }
 
-for (const intensity of INTENSITIES) {
+for (const arm of ARMS) {
+  const intensity = arm.intensity;
   const kickoffMeans = [];
   const kickoffWorst = [];
   let matches = 0;
@@ -50,6 +61,7 @@ for (const intensity of INTENSITIES) {
     G.takeOverClub(game, league.clubIds[s % league.clubIds.length], 'Probe', 'ALB');
     const club = G.userClub(game);
     club.trainingIntensity = intensity;
+    game.settings.autoPickOnMatchday = arm.autoPick;
     let lastFixtureDay = -99;
 
     let guard = 0;
@@ -103,7 +115,7 @@ for (const intensity of INTENSITIES) {
   }
 
   const mean = (a) => a.reduce((x, y) => x + y, 0) / a.length;
-  console.log(`${intensity.padEnd(8)} matches ${String(matches).padStart(3)}`
+  console.log(`${arm.label.padEnd(12)} matches ${String(matches).padStart(3)}`
     + ` | kickoff mean ${mean(kickoffMeans).toFixed(1)}`
     + ` worst-starter mean ${mean(kickoffWorst).toFixed(1)}`
     + ` p10 ${pct(kickoffWorst, 0.1).toFixed(1)}`
@@ -114,7 +126,7 @@ for (const intensity of INTENSITIES) {
     + ` | congested fixtures ${congested}, worst starter there ${congestedWorst.toFixed(1)}`
     + ` | squad daily low ${squadDayMin.toFixed(1)}`
     + ` | full-time mean ${mean(fullTimeMeans).toFixed(1)}`
-    + `\n         squad on match day: mean ${mean(squadMeans).toFixed(1)}`
+    + `\n             squad on match day: mean ${mean(squadMeans).toFixed(1)}`
     + `, under 85 ${(squadUnder85 / squadCounted * 100).toFixed(1)}%`
     + `, under 70 ${(squadUnder70 / squadCounted * 100).toFixed(1)}%`
     + ` (${(squadUnder70 / matches).toFixed(1)} players per match day)`);

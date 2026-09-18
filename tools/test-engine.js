@@ -23,7 +23,7 @@ import {
   newGame, advanceDay, playFixture, endSeason, rolloverSeason, userClub,
   takeOverClub, dismissalCompensation, evaluateRequest, makeRequest, managerContract, userSackRisk,
   availableJobs, openVacancy, closeExpiredVacancies, VACANCY_DAYS, applyInterview,
-  setRegistration, sackManager,
+  setRegistration, sackManager, createMatchState, nextFixtureFor,
 } from '../src/state/game.js';
 import { serialiseGame, deserialiseGame } from '../src/state/codec.js';
 import { validateCustomPlayer, describeCustomPlayer, blankCustomPlayer } from '../src/state/library.js';
@@ -1483,6 +1483,49 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   const meanAge = ages.reduce((a, b) => a + b, 0) / ages.length;
   check('squads keep a sensible age profile', meanAge > 21 && meanAge < 28, `mean age ${meanAge.toFixed(1)}`);
   record('mean squad age after 3 seasons', meanAge.toFixed(1));
+}
+
+// --- The eleven that starts is the eleven you think starts --------------------
+{
+  // takeOverClub auto-picks your XI once and writes those player ids into the
+  // tactic. Nothing re-picks it after that, so the same eleven start every match
+  // at whatever condition they are in, while every AI club re-picks before each
+  // of its own. `game.settings.autoPickOnMatchday` was created for this and was
+  // written at game creation and read nowhere - a setting that existed only as a
+  // line in a save file.
+  const startingXI = (game) => {
+    const fixture = nextFixtureFor(game, game.userClubId);
+    const state = createMatchState(game, fixture);
+    const mine = state.home.clubId === game.userClubId ? state.home : state.away;
+    return new Set(mine.onPitch.map((e) => e.player.id));
+  };
+  const setup = (autoPick) => {
+    const g = newGame({ seed: 31337, size: 'small', managerName: 'Picker', clubId: null });
+    const lg = g.world.leagues.find((l) => l.nation === 'ALB' && l.tier === 1);
+    takeOverClub(g, lg.clubIds[0], 'Picker', 'ALB');
+    g.settings.autoPickOnMatchday = autoPick;
+    const club = userClub(g);
+    // Drain an outfield starter to a condition nobody would pick him at, and
+    // leave a fit deputy in the squad.
+    const assigned = club.tactic.assignments.map((a) => a.playerId).filter(Boolean);
+    const victim = g.world.players[assigned[6]];
+    victim.condition = 24;
+    return { g, victimId: victim.id };
+  };
+
+  const fresh = newGame({ seed: 31337, size: 'small', managerName: 'Picker', clubId: null });
+  check('a new game starts with match-day auto-pick off',
+    fresh.settings.autoPickOnMatchday === false);
+
+  const off = setup(false);
+  check('with it off, an exhausted starter still starts',
+    startingXI(off.g).has(off.victimId),
+    'your XI is pinned, which is the behaviour the setting exists to change');
+
+  const on = setup(true);
+  check('with it on, an exhausted starter is rested',
+    !startingXI(on.g).has(on.victimId),
+    'the setting is read nowhere and the tired man plays anyway');
 }
 
 // --- Custom player library ---------------------------------------------------

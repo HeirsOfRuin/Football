@@ -16,6 +16,36 @@ import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { kitUri } from '../../gen/identity.js';
 
+/**
+ * How fit the selected eleven actually is.
+ *
+ * Nothing said this before. The pitch shows a condition bar per player only in
+ * the squad tables below, the bar does not change colour until 66, and the XI
+ * does not re-pick itself - so a manager can carry two or three drained
+ * starters into a match for weeks and reasonably conclude that training is
+ * grinding his squad down.
+ */
+function readinessLine(lineup) {
+  const picked = lineup.starters.map((s) => s.player).filter(Boolean);
+  const tired = picked.filter((p) => p.condition < 70);
+  const short = picked.filter((p) => p.condition >= 70 && p.condition < 85);
+  if (!tired.length && !short.length) {
+    return '<p class="good small center" style="margin:6px 0 0">Every one of this XI is fresh.</p>';
+  }
+  // Three names and a count. A fresh squad sits in the high nineties, so the
+  // second group is real information, but listing eight of them on a phone turns
+  // the line into wallpaper and wallpaper is not read.
+  const names = (list) => {
+    const shown = list.slice(0, 3).map((p) => `${esc(p.short)} ${Math.round(p.condition)}%`).join(', ');
+    return list.length > 3 ? `${shown} and ${list.length - 3} more` : shown;
+  };
+  const parts = [];
+  if (tired.length) parts.push(`<span class="bad">${tired.length} tired: ${names(tired)}</span>`);
+  if (short.length) parts.push(`<span class="warn">${short.length} short of full: ${names(short)}</span>`);
+  return `<p class="small center" style="margin:6px 0 0">${parts.join(' · ')}
+    <button class="sm" data-act="autopick" style="margin-left:8px">Rest them</button></p>`;
+}
+
 export function render(app) {
   const game = app.game;
   const world = game.world;
@@ -59,6 +89,12 @@ export function render(app) {
             <div class="spacer"></div>
             <button class="sm" data-act="autopick">Pick strongest XI</button>
           </div>
+          <label class="row small faint" style="gap:7px;margin:-4px 0 12px;cursor:pointer">
+            <input type="checkbox" id="autopick-matchday" ${game.settings?.autoPickOnMatchday ? 'checked' : ''}>
+            <span>Re-pick the strongest available XI before every match. Off by default:
+              your eleven is otherwise pinned from the day you took the job and will start
+              however tired they are.</span>
+          </label>
           <div class="pitch">
             <svg class="markings" viewBox="0 0 68 100" preserveAspectRatio="none">
               <rect x="1" y="1" width="66" height="98" fill="none" stroke="#4a7a5e" stroke-width=".4"/>
@@ -86,6 +122,7 @@ export function render(app) {
   }).join('')}
           </div>
           ${lineup.missing ? `<p class="bad small center">${lineup.missing} position${lineup.missing > 1 ? 's' : ''} cannot be filled — not enough fit players.</p>` : ''}
+          ${readinessLine(lineup)}
           <p class="faint small center" style="margin-bottom:0">Click a position to change the player, role or duty.</p>
         `)}
 
@@ -151,11 +188,21 @@ export function render(app) {
       root.querySelectorAll('[data-special]').forEach((sel) => {
         sel.onchange = () => { tactic[sel.dataset.special] = sel.value || null; };
       });
-      root.querySelector('[data-act="autopick"]').onclick = () => {
-        club.tactic = autoAssignSpecialists(world, club, autoPick(world, club, tactic));
-        toast('Strongest available XI selected.');
-        app.refresh();
+      root.querySelector('#autopick-matchday').onchange = (e) => {
+        game.settings.autoPickOnMatchday = e.target.checked;
+        toast(e.target.checked ? 'The strongest available XI will be picked before each match.'
+          : 'Your selected XI will start every match.');
       };
+      // Two buttons carry this: the one in the header and the one the readiness
+      // line offers beside the names of the tired men. querySelector would have
+      // bound the first and left the second dead.
+      root.querySelectorAll('[data-act="autopick"]').forEach((b) => {
+        b.onclick = () => {
+          club.tactic = autoAssignSpecialists(world, club, autoPick(world, club, tactic));
+          toast('Strongest available XI selected.');
+          app.refresh();
+        };
+      });
       root.querySelector('[data-act="autobench"]').onclick = () => {
         club.tactic = { ...tactic, bench: [] };
         toast('Bench filled automatically.');

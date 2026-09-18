@@ -315,6 +315,16 @@ export function prepareFixture(game, fixture) {
   const rng = subRng(game.rng, `prep:${fixture.id}`);
   if (!home.isUserClub) prepareAiClub(world, home, away, true, rng);
   if (!away.isUserClub) prepareAiClub(world, away, home, false, rng);
+  // Your eleven is pinned the day you take the job - takeOverClub auto-picks it
+  // once and nothing has ever re-picked it since, so the same eleven start every
+  // match however tired they are while the AI re-picks before each of its own.
+  // `autoPickOnMatchday` existed for this and was written at game creation and
+  // read nowhere. It is off by default, because overriding a team someone chose
+  // deliberately would be worse than the fatigue.
+  const user = home.isUserClub ? home : away.isUserClub ? away : null;
+  if (user && game.settings?.autoPickOnMatchday) {
+    user.tactic = autoAssignSpecialists(world, user, autoPick(world, user, user.tactic));
+  }
   return { home, away };
 }
 
