@@ -503,10 +503,32 @@ td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numer
   .brand h1 { display: none; }
   .brand .club-strip { margin: 0; }
   .brand .club-name { font-size: 11px; max-width: 110px; }
-  .nav { display: flex; flex: 1; padding: 0; overflow-x: auto; overflow-y: hidden; }
+  /* The sidebar becomes a strip, and the strip is the only way to any screen.
+     Measured at 390px: 224px of it is visible and 1,203px of it exists, so
+     thirteen of seventeen entries sit off the right-hand edge with nothing
+     saying they are there. It scrolls, so nothing was unreachable - but a
+     scroll nobody can see is the same thing as a wall. The fade says there is
+     more, and app.js scrolls the active entry into view on every render so you
+     are never looking at a strip that does not contain where you are.
+     A proper overflow menu is the better answer and is in the backlog; this is
+     the part that stops it being a trap. */
+  .nav {
+    display: flex; flex: 1; padding: 0 20px 0 0;
+    overflow-x: auto; overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    /* The fade is on .nav because .nav is what clips: `overflow-x: visible`
+       beside `overflow-y: hidden` computes to auto, so the strip scrolls here
+       and not on the sidebar. Putting it on the wrong element is exactly the
+       mistake that made the first version of this do nothing at all. */
+    mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent);
+  }
+  .nav::-webkit-scrollbar { display: none; }
   .nav-item {
     border-left: 0; border-bottom: 2px solid transparent;
-    padding: 11px 13px; white-space: nowrap; font-size: 13px;
+    /* 44px minimum touch target, which 11px of padding on a 13px line was not. */
+    padding: 13px 13px; min-height: 44px; display: flex; align-items: center;
+    white-space: nowrap; font-size: 13px;
   }
   .nav-item.active { border-left-color: transparent; border-bottom-color: var(--accent); }
   .nav-item .count { margin-left: 6px; }

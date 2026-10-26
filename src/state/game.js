@@ -5,14 +5,14 @@ import { clamp, remap, sortBy, money } from '../core/util.js';
 import { SEASON_DAYS, KEY_DAYS, transferWindowOpen, dayToDate } from '../core/calendar.js';
 import { generateWorld, squadStrength, makeReserveSide } from '../gen/worldgen.js';
 import { abilityForReputation } from '../data/nations.js';
-import { generatePlayer, emptyStats, estimateValue, estimateWage } from '../gen/playergen.js';
+import { generatePlayer, emptyStats, estimateWage } from '../gen/playergen.js';
 import { currentAbility } from '../data/attributes.js';
 import { beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
 import { autoPick, autoAssignSpecialists, refreshRegistration, registrationLimit } from '../engine/lineup.js';
 import {
   rivalryImportance, rivalryAttendance, rivalryBetween, recordDerbyResult, derbyWeight,
 } from '../engine/rivalry.js';
-import { runWeeklyScouting, scoutCount, assignScout, clearAssignment } from '../engine/scouting.js';
+import { runWeeklyScouting } from '../engine/scouting.js';
 import {
   buildLeagueSchedule, scheduleDomesticCup, openNextCupRound, scheduleContinental,
   seedContinental, continentalKnockout, openContinentalRound, sortTable, applyResultToTable,
@@ -22,7 +22,7 @@ import { applyMatchdayIncome, applyMonthlyIncome, payWeeklyWages, setSeasonBudge
 import {
   trainPlayer, dailyPlayerTick, applyMatchEffects, processDisciplinary, generateYouthIntake, refreshSquadThresholds, trainingSlots, expectedRole, ROLE_LABELS,
 } from '../engine/training.js';
-import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, completeLoan, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
+import { aiTransferAttempt, aiSquadTrim, aiReleaseSurplus, marketValue, contractDemand, renewContract, releasePlayer, returnFromLoan, aiLoanAttempt } from '../engine/transfers.js';
 import { seasonObjectives, objectiveScore, OBJECTIVE_WEIGHT } from '../data/objectives.js';
 import { interviewOutcome, ambitionShift } from '../data/interview.js';
 import {

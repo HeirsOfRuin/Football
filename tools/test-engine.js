@@ -1532,6 +1532,74 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
     'the setting is read nowhere and the tired man plays anyway');
 }
 
+// --- A save made before today has to open, and keep playing ------------------
+{
+  // Invariant: saves are a contract. v10 added rivalries and scouting, both
+  // through migrateSave, and a migration that loads and then throws on the next
+  // Continue is the failure a player actually meets - so this plays on after it.
+  const g = newGame({ seed: 777, size: 'small', managerName: 'Old', clubId: null });
+  const lg = g.world.leagues.find((l) => l.nation === 'ALB' && l.tier === 1);
+  takeOverClub(g, lg.clubIds[1], 'Old', 'ALB');
+  for (let d = 0; d < 40; d++) {
+    const r = advanceDay(g);
+    if (r.stopped && r.reason === 'userMatch') {
+      playFixture(g, g.fixtures[g.pendingMatchId]);
+      g.status = 'idle';
+      g.pendingMatchId = null;
+    }
+  }
+
+  // Age it back to v9 by stripping everything v10 introduced.
+  const raw = JSON.parse(JSON.stringify(serialiseGame(g)));
+  raw.v = 9;
+  raw.game.version = 9;
+  for (const id in raw.world.clubs) delete raw.world.clubs[id].rivals;
+  delete raw.game.scoutAssignments;
+  delete raw.game.scouted;
+
+  let loaded = null;
+  try {
+    loaded = deserialiseGame(raw);
+  } catch (e) {
+    check('a save from the previous version opens', false, e.message);
+  }
+  if (loaded) {
+    check('a save from the previous version opens', true);
+    const club = userClub(loaded);
+    check('it gains rivalries it never had', RIVALRY.rivalsOf(loaded.world, club).length > 0,
+      'an existing career would never see a derby');
+    check('it gains somewhere to keep scouting knowledge',
+      Array.isArray(loaded.scoutAssignments) && !!loaded.scouted);
+    check('nothing else moved', loaded.day === g.day
+      && Object.keys(loaded.world.clubs).length === Object.keys(g.world.clubs).length);
+
+    let playedOn = true;
+    try {
+      for (let d = 0; d < 40; d++) {
+        const r = advanceDay(loaded);
+        if (r.stopped && r.reason === 'userMatch') {
+          playFixture(loaded, loaded.fixtures[loaded.pendingMatchId]);
+          loaded.status = 'idle';
+          loaded.pendingMatchId = null;
+        }
+        if (r.stopped && r.reason === 'seasonRollover') break;
+      }
+    } catch (e) {
+      playedOn = false;
+      check('a migrated save keeps playing', false, e.message);
+    }
+    if (playedOn) check('a migrated save keeps playing', true);
+
+    try {
+      const again = deserialiseGame(JSON.parse(JSON.stringify(serialiseGame(loaded))));
+      check('and survives being saved again',
+        RIVALRY.rivalsOf(again.world, userClub(again)).length > 0);
+    } catch (e) {
+      check('and survives being saved again', false, e.message);
+    }
+  }
+}
+
 // --- The touchline ------------------------------------------------------------
 {
   const league = world.leagues.find((l) => l.tier === 1);

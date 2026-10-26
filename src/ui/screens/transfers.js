@@ -5,8 +5,7 @@ import { userClub } from '../../state/game.js';
 import { currentAbility, POSITIONS, POSITION_LABELS, positionEffectiveness } from '../../data/attributes.js';
 import { marketValue, askingPrice, identifyNeed, contractDemand } from '../../engine/transfers.js';
 import {
-  fogBand, scoutCount, knowledgeLabel, effectiveKnowledge, ASSIGNMENT_TYPES,
-  assignScout, clearAssignment, knowledgeOf,
+  fogBand, scoutCount, knowledgeLabel, ASSIGNMENT_TYPES, assignScout, clearAssignment,
 } from '../../engine/scouting.js';
 import { weeklyWageBill } from '../../engine/finance.js';
 import { transferWindowOpen, KEY_DAYS } from '../../core/calendar.js';

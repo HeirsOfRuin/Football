@@ -10,7 +10,7 @@
 // substitutions, team talks and tactical changes, then resume.
 
 import { Rng } from '../core/rng.js';
-import { makeCall, readOpponent, TOUCHLINE_CALLS, CALL_IDS } from './touchline.js';
+import { makeCall, readOpponent } from './touchline.js';
 import { clamp, remap, weightedAttrs } from '../core/util.js';
 import { teamStrength, keeperRating, computeMatchRating, traitEffects } from './ratings.js';
 import { buildLineup } from './lineup.js';

@@ -113,6 +113,33 @@ export const app = {
     // next screen somebody adds.
     bindFolds(content);
     bindHints(content, this);
+    this.revealActiveNav(root);
+  },
+
+  /**
+   * Keep the screen you are on inside the strip.
+   *
+   * At phone width the sidebar is a horizontal strip, and measured at 390px it
+   * shows 224 pixels of 1,203: go to Finances and the highlight marking where
+   * you are is four hundred pixels off the right-hand edge. Scrolling it into
+   * view costs nothing and means the strip always contains the answer to
+   * "where am I".
+   */
+  revealActiveNav(root) {
+    const active = root.querySelector('.nav-item.active');
+    if (!active) return;
+    // Walk up to whatever actually scrolls rather than naming an element. The
+    // first version scrolled `.sidebar`, which does not scroll - `.nav` does,
+    // because `overflow-x: visible` next to `overflow-y: hidden` computes to
+    // auto. It ran on every render and moved nothing, and only a probe that
+    // measured where the highlight ended up caught it.
+    let strip = active.parentElement;
+    while (strip && strip.scrollWidth <= strip.clientWidth) strip = strip.parentElement;
+    if (!strip) return;
+    const a = active.getBoundingClientRect();
+    const s = strip.getBoundingClientRect();
+    if (a.left >= s.left && a.right <= s.right) return;
+    strip.scrollLeft += (a.left - s.left) - (s.width - a.width) / 2;
   },
 
   shellHtml(view) {
