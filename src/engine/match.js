@@ -287,7 +287,25 @@ function liveTotals(state, side) {
 
 function chanceQuality(state, atk, defTot, gkRating, type, opts = {}) {
   if (type === 'penalty') return P.penaltyQuality;
-  if (type === 'corner') return P.cornerQuality * state.rng.range(0.6, 1.7);
+  if (type === 'corner') {
+    // A corner is a contest between two boxes, and this function did not know
+    // that. Measured: scaling a side's whole aerial total by ±15% changed goals,
+    // points, shots and xG by exactly nothing, to two decimal places - because
+    // `aerial` was read in one place, to pick which player attacked the ball,
+    // and a team-wide multiplier leaves that choice identical. A side of
+    // six-footers had no edge at a corner over a side of small technical
+    // players, and a dominant centre-half defended one no better than anybody.
+    //
+    // `advantage` is 0.5 when the two boxes are equal, so this is exactly 1.0 at
+    // parity and the engine's calibration is untouched for an average tie.
+    // Steeper than the raw ratio. `advantage` compresses hard - a side 15%
+    // better in the air comes out at 1.08 - and corners are only about a
+    // quarter of the chances in a match, so a flat ratio left the whole thing
+    // worth two hundredths of a goal. The exponent makes winning your own box
+    // worth something at the corner itself, which is where it should show.
+    const edge = 2 * clamp(advantage(atk.aerial, defTot.aerial), 0.2, 0.8);
+    return P.cornerQuality * (edge ** 2.2) * state.rng.range(0.6, 1.7);
+  }
   if (type === 'freekick') return P.freeKickDirectQuality * state.rng.range(0.5, 1.6);
   if (type === 'longshot') return P.longShotQuality * state.rng.range(0.5, 1.8);
   const adv = advantage(atk.create + atk.finish * 0.5, defTot.defend + gkRating * 0.9);

@@ -8,6 +8,22 @@
 // Sample sizing: at 400 matches per arm the standard error on goals per match
 // is about 0.06, so treat anything under ~0.15 goals as noise and anything
 // under ~1.5 percentage points of possession as noise.
+//
+// WHAT THIS TOOL CANNOT SEE, and it misled its own author once already.
+//
+// Every match here is played by two rested sides with no fixture behind them
+// and none ahead. Several settings are paid for in fatigue, injuries and squad
+// depth, and none of those exist in a friendly between fresh teams - so this
+// overstates anything whose price comes later. Measured: it reported "Very
+// High" tempo worth +0.18 points a game over Standard, which reads as a
+// dominant setting that needs a cost put back. Across twelve full seasons per
+// option - 456 league games each - the gap was +0.08 against a noise floor of
+// +/-0.14, and the ordering of the five options had changed.
+//
+// So use this to answer "does the engine read this setting at all", which it
+// answers exactly and cheaply. Use `npm run season-ablate <instruction>` to
+// answer "is this setting worth choosing", which is a different question and
+// takes a season to ask.
 
 import { generateWorld, squadStrength } from '../src/gen/worldgen.js';
 import { simulateMatch } from '../src/engine/match.js';

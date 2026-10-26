@@ -10,13 +10,16 @@ conversation do not.
   give training slots, facility upgrades and board requests something concrete
   behind them. Offered 2026-10 and declined for now.
 
-- **Strengthen the tactical instruction weights, and recalibrate.** Measured
-  during the touchline pass: a changed shape for the last thirty minutes is
-  worth about a tenth of a goal of xG and no measurable points at n=400. The
-  instructions move play in the right directions but not far enough for any
-  in-match decision to be worth making. Fixing it means moving the weights the
-  whole match engine is calibrated against, so it is a pass of its own with a
-  full recalibration, not a tweak.
+- ~~Strengthen the tactical instruction weights, and recalibrate.~~ **Measured
+  and withdrawn.** The premise came from a single-match ablation that cannot see
+  a cost paid in fatigue. Over 456 league games per option, no tempo setting
+  beats the default by more than the noise floor of ±0.14 ppg. One real defect
+  came out of it — `aerial` was read nowhere that mattered — and that is fixed.
+  See the decisions log.
+- **Set-piece quality beyond corners.** Free kicks and long shots still take no
+  team input at all: `chanceQuality` returns a constant times a random range for
+  both. Corners now read the two boxes against each other; the same argument
+  applies to a wall and a dead-ball specialist.
 
 ## Not yet proposed
 

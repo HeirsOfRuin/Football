@@ -1600,6 +1600,54 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   }
 }
 
+// --- A corner is a contest between two boxes ---------------------------------
+{
+  // `aerial` was computed for every player, summed into a team total, and read
+  // in exactly one place: choosing which player attacked a corner. A team-wide
+  // multiplier leaves that choice identical, so scaling a side's whole aerial
+  // total by 15% moved goals, points, shots and xG by precisely nothing. A side
+  // of six-footers had no edge at a corner, and a dominant centre-half defended
+  // one no better than anybody else.
+  const league = world.leagues.find((l) => l.tier === 1);
+  const [a, b] = league.clubIds.slice(0, 2).map((id) => world.clubs[id]);
+  const run = (factor) => {
+    let cornerGoals = 0;
+    const RUNS = 70;
+    for (let i = 0; i < RUNS; i++) {
+      for (const c of [a, b]) {
+        for (const id of c.squad) {
+          Object.assign(world.players[id],
+            { condition: 96, matchCondition: 96, morale: 70, form: 0, sharpness: 85 });
+        }
+      }
+      const st = MATCH.beginMatch(world, {
+        homeClub: a, awayClub: b, homeTactic: a.tactic, awayTactic: b.tactic,
+        importance: 0.35, rng: new Rng(70000 + i),
+      });
+      // aiManage calls refreshStrength, which rebuilds the totals and throws the
+      // multiplier away mid-match, so neither side is managed here.
+      st.autoManageUser = false;
+      st.home.isUser = true;
+      st.away.isUser = true;
+      st.home.strength.totals.aerial *= factor;
+      MATCH.runMatch(st);
+      cornerGoals += st.events.filter((e) => e.type === 'goal' && e.side === 'home'
+        && /header|corner/i.test(e.text || '')).length;
+    }
+    return cornerGoals / RUNS;
+  };
+  const small = run(0.7);
+  const big = run(1.4);
+  check('being big wins you corners', big > small,
+    `a side twice as strong in the air scores ${big.toFixed(3)} a game from corners against ${small.toFixed(3)}`);
+  observed['corner goals per match, weak air v strong'] = `${small.toFixed(3)} v ${big.toFixed(3)}`;
+
+  // Neutral at parity, or every set piece in the game just moved and the
+  // calibration moved with it.
+  const atParity = run(1);
+  check('two equal boxes score what they always did', atParity > 0 && atParity < big && atParity > small);
+}
+
 // --- The touchline ------------------------------------------------------------
 {
   const league = world.leagues.find((l) => l.tier === 1);

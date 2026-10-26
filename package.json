@@ -16,6 +16,8 @@
     "ux": "node tools/ux-audit.js",
     "rivalry": "node tools/rivalry.js",
     "scout": "node tools/scout.js",
-    "touchline": "node tools/touchline.js"
+    "touchline": "node tools/touchline.js",
+    "season-ablate": "node tools/setting-season.js",
+    "phase-gain": "node tools/phase-gain.js"
   }
 }

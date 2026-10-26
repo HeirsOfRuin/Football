@@ -14,7 +14,7 @@
 // Named after the content of the served files by tools/stamp-cache.mjs (npm run
 // stamp); npm run check fails while it is stale. Anything cached under an older
 // name is deleted on activate, so a stale module can never be served alongside a new one.
-const CACHE = 'touchline-404da9ecb4';
+const CACHE = 'touchline-bfef8b8253';
 
 // The few files without which nothing can start.
 const SHELL = [

@@ -51,6 +51,8 @@ those decisions matter.
 | `npm run rivalry` | Does a derby play differently from an ordinary fixture |
 | `npm run scout` | How wrong are you about a stranger, and does watching him help |
 | `npm run touchline` | Is each in-match call best somewhere, and is any of them best everywhere |
+| `npm run phase-gain` | What a phase total is actually worth in points — the exchange rate |
+| `npm run season-ablate <instr>` | Is a setting worth choosing *over a season*, with its noise floor |
 | `npm run pwa` | Installable, offline, and does a pushed fix reach an existing player |
 | `node tools/calibrate.js` | Are the match numbers football-shaped, every tier |
 | `node tools/ablate.js` | Does every tactical setting measurably change play |
@@ -112,6 +114,62 @@ list: each item names what is wrong and carries the button that fixes it, which
 is the one thing a management screen owes its reader. Squad stays dense at 207
 numbers and that is correct — a squad list is supposed to be a squad list, and
 it has filters.
+
+### 2026-10 — Tactics: one dead phase, and a premise that did not survive
+
+Set out to strengthen the tactical instruction weights, on the strength of the
+touchline finding that no in-match call moved points. Measured first, and most
+of the premise turned out to be wrong.
+
+**What the phases are actually worth.** New `tools/phase-gain.js` multiplies one
+phase total by a known factor and reads off the result, because outcomes resolve
+through `advantage(a, b) = a / (a + b)` — a ratio between two near-equal numbers,
+where a 3% nudge to one side moves the advantage by well under 1%. Per ±15% of a
+phase, 400 matches, noise ±0.10 ppg:
+
+```
+create  ±0.06     press  -0.13 / +0.05     defend  -0.15 / +0.00
+build    noise    drive   0.00             finish   0.00
+aerial   0.00 — identical to the baseline on every metric, to two decimals
+```
+
+**`aerial` was dead, and that one is fixed.** It was computed for every player,
+summed into a team total, and read in exactly one place: choosing *which* player
+attacked a corner. A team-wide multiplier leaves that choice identical, so a
+side of six-footers had no edge at a corner and a dominant centre-half defended
+one no better than anybody. Corners now scale with the two boxes against each
+other — exactly 1.0 at parity, so the calibration is untouched for an average
+tie. Goals from corners across the aerial range: **0.073 → 0.155 a match**, and
+at parity corners are 9.6% of goals, which is where real football sits.
+
+`finish` and `drive` measure near zero too, but both have narrow legitimate
+roles — individual finishing already dominates `resolveShot`, and drive feeds
+counters — so neither is dead and neither was touched.
+
+**The dominance finding did not survive its own sample size.** `tools/ablate.js`
+said "Very High" tempo was worth +0.18 ppg over Standard with no visible cost,
+which reads as a dominant setting that has to be given a price. But every match
+in that tool is played by two rested sides with no fixture behind or ahead, and
+tempo is paid for in fatigue. New `tools/setting-season.js` plays whole seasons:
+
+```
+Tempo, 12 seasons per option (456 league games each), noise ±0.14 ppg
+  Very Slow 1.21   Slow 1.39   Standard 1.30   Higher 1.40   Very High 1.38
+  0 options beat the default by more than the noise. 0 lose to it by more.
+```
+
+An earlier three-season run of the same tool put Standard top at 1.51 and
+everything else behind it — the opposite ordering, from the same code. That run
+had a noise floor of ±0.19 and I had not printed it. Printing it is now part of
+the tool.
+
+**Decided: no weight changes.** Tactical settings in this game are worth roughly
+0.1 ppg each, and a full season's outcome noise is ±0.14. Raising the weights
+would make a single dropdown more decisive than a manager is in real football,
+on the basis of an effect I have not shown to be wrong. The honest position is
+that the premise came from a tool answering a different question than the one
+asked of it, and the fix was to build the tool that answers this one and to
+write that limitation into the old one's header.
 
 ### 2026-10 — The touchline, and an honest result
 
