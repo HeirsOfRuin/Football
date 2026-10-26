@@ -11,9 +11,10 @@
 // — it is one `import` tree from `app.js` — so one online visit populates the
 // whole cache without anyone maintaining a list.
 
-// Bump to invalidate every cached file. Anything cached under an older name is
-// deleted on activate, so a stale module can never be served alongside a new one.
-const CACHE = 'touchline-v1';
+// Named after the content of the served files by tools/stamp-cache.mjs (npm run
+// stamp); npm run check fails while it is stale. Anything cached under an older
+// name is deleted on activate, so a stale module can never be served alongside a new one.
+const CACHE = 'touchline-f1d48c14de';
 
 // The few files without which nothing can start.
 const SHELL = [
