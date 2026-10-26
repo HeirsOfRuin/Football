@@ -5,7 +5,7 @@ import { SEASON_DAYS, formatDay, transferWindowOpen } from '../core/calendar.js'
 import { saveGame, loadGame, loadSettings, saveSettings, exportGameFile } from '../state/store.js';
 import { unreadCount } from '../engine/news.js';
 import { money } from '../core/util.js';
-import { badge, toast, closeAllModals, esc, openModal } from './components.js';
+import { badge, toast, closeAllModals, esc, openModal, bindFolds, bindHints } from './components.js';
 
 import * as menuScreen from './screens/menu.js';
 import * as libraryScreen from './screens/library.js';
@@ -108,6 +108,11 @@ export const app = {
     this.bindShell(root);
     const content = root.querySelector('.content');
     if (view.mount) view.mount(content, this);
+    // Bound here rather than in each screen's mount: a disclosure mechanism
+    // every screen has to remember to wire is one that will be forgotten on the
+    // next screen somebody adds.
+    bindFolds(content);
+    bindHints(content, this);
   },
 
   shellHtml(view) {
@@ -202,12 +207,21 @@ export const app = {
           ${['slow', 'normal', 'fast', 'instant'].map((k) => `<option value="${k}" ${(s.matchSpeed || 'normal') === k ? 'selected' : ''}>${k === 'instant' ? 'Skip to result' : k[0].toUpperCase() + k.slice(1)}</option>`).join('')}
         </select></div>
         <div class="field"><label><input type="checkbox" id="set-autosave" ${s.autosave === false ? '' : 'checked'}> Autosave after each match and each day</label></div>
+        <div class="field"><label><input type="checkbox" id="set-hints" ${s.hintsOff ? '' : 'checked'}> Show the one-line hint on each screen</label></div>
         <p class="small faint">Press <b>Space</b> to continue, or to start and pause a match.</p>`,
       footer: '<button data-act="export">Export save file</button><button class="primary" data-close>Done</button>',
       onMount: (modal) => {
         modal.querySelector('#set-pace').onchange = (e) => this.setSetting('dayAtATime', e.target.value === 'day');
         modal.querySelector('#set-speed').onchange = (e) => this.setSetting('matchSpeed', e.target.value);
         modal.querySelector('#set-autosave').onchange = (e) => this.setSetting('autosave', e.target.checked);
+        modal.querySelector('#set-hints').onchange = (e) => {
+          this.setSetting('hintsOff', !e.target.checked);
+          // Turning them back on means all of them, including the ones already
+          // dismissed - otherwise the switch does nothing for anyone who has
+          // played for a while, which is everyone who would want it.
+          if (e.target.checked) this.setSetting('hintsSeen', {});
+          this.refresh();
+        };
         modal.querySelector('[data-act="export"]').onclick = () => {
           exportGameFile(this.game);
           toast('Save file downloaded.');

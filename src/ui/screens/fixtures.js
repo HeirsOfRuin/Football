@@ -1,9 +1,10 @@
 // Fixtures and results for the user's club, plus a match report viewer.
 
-import { esc, panelTight, emptyState, shortDate, openModal, badge, tabs, ratingCell } from '../components.js';
+import { esc, panelTight, emptyState, shortDate, openModal, badge, tabs, ratingCell, hint } from '../components.js';
 import { userClub, clubFixtures } from '../../state/game.js';
 import { showPlayer } from '../playerProfile.js';
 import { sortBy } from '../../core/util.js';
+import { rivalryBetween } from '../../engine/rivalry.js';
 
 export function render(app) {
   const game = app.game;
@@ -11,10 +12,20 @@ export function render(app) {
   const club = userClub(game);
   if (!club) return { html: emptyState('No club.') };
 
-  const state = app.screenState.fixtures || (app.screenState.fixtures = { view: 'all' });
-  let fixtures = clubFixtures(game, club.id);
-  if (state.view === 'results') fixtures = fixtures.filter((f) => f.played);
-  if (state.view === 'upcoming') fixtures = fixtures.filter((f) => !f.played);
+  // Opens on the games either side of today rather than the whole season. The
+  // full list is fifty-odd rows - four and a half screens on a phone - and the
+  // reason anyone opens this screen in November is to see what is coming and
+  // what just happened. The season is still one tab away.
+  const state = app.screenState.fixtures || (app.screenState.fixtures = { view: 'now' });
+  const all = clubFixtures(game, club.id);
+  let fixtures = all;
+  if (state.view === 'results') fixtures = all.filter((f) => f.played);
+  else if (state.view === 'upcoming') fixtures = all.filter((f) => !f.played);
+  else if (state.view === 'now') {
+    const done = all.filter((f) => f.played);
+    const next = all.filter((f) => !f.played);
+    fixtures = [...done.slice(-5), ...next.slice(0, 5)];
+  }
 
   if (app.params.fixtureId) {
     const f = game.fixtures[app.params.fixtureId];
@@ -28,13 +39,17 @@ export function render(app) {
 
   return {
     html: `
-      ${tabs([{ id: 'all', label: 'All' }, { id: 'upcoming', label: 'Upcoming' }, { id: 'results', label: 'Results' }], state.view)}
+      ${tabs([{ id: 'now', label: 'Around now' }, { id: 'upcoming', label: 'Upcoming' },
+    { id: 'results', label: 'Results' }, { id: 'all', label: 'Whole season' }], state.view)}
+      ${hint(app, 'fixtures', 'This opens on the five games either side of today. '
+    + 'Whole season has every fixture; a played game opens its report.')}
       <div class="row small faint" style="margin-bottom:10px">
         Played ${played.length} · ${w}W ${d}D ${played.length - w - d}L ·
         ${played.reduce((a, f) => a + (f.homeId === club.id ? f.result.homeGoals : f.result.awayGoals), 0)} scored,
         ${played.reduce((a, f) => a + (f.homeId === club.id ? f.result.awayGoals : f.result.homeGoals), 0)} conceded
       </div>
-      ${panelTight('Fixtures', fixtures.length === 0 ? emptyState('Nothing to show.') : `
+      ${panelTight(state.view === 'now' ? 'Around now' : 'Fixtures',
+    fixtures.length === 0 ? emptyState('Nothing to show.') : `
         <div class="table-wrap"><table><thead><tr>
           <th>Date</th><th>Competition</th><th>Round</th><th></th><th>Opponent</th>
           <th class="center">Result</th><th>Scorers</th><th class="num">Att.</th></tr></thead>
@@ -50,7 +65,8 @@ export function render(app) {
             <td class="small">${esc(f.compName)}</td>
             <td class="small faint">${esc(String(f.round))}</td>
             <td class="small faint">${isHome ? 'H' : 'A'}</td>
-            <td class="nowrap">${badge(opp, 18)} ${esc(opp.short)}</td>
+            <td class="nowrap">${badge(opp, 18)} ${esc(opp.short)}${
+  rivalryBetween(world, f.homeId, f.awayId) ? ' <span class="pill derby">Derby</span>' : ''}</td>
             <td class="center">${res}</td>
             <td class="small faint">${scorers}</td>
             <td class="num small faint">${f.played ? f.result.attendance.toLocaleString() : ''}</td>

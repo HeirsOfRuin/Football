@@ -5,7 +5,7 @@
 // identically to everyone and forgotten about. The individual slots are the
 // reason it needs a screen: they are a weekly decision with real scarcity.
 
-import { esc, panel, panelTight, kv, openModal, toast, emptyState } from '../components.js';
+import { esc, panel, panelTight, kv, openModal, toast, emptyState, hint} from '../components.js';
 import { userClub } from '../../state/game.js';
 import {
   TRAINING_FOCUSES, TRAINING_INTENSITY, PROGRAMME_TYPES, PROGRAMME_GROUPS,
@@ -89,7 +89,9 @@ export function render(app) {
       </td></tr>`);
   }
 
-  const html = `<div class="grid c1-2">
+  const html = `
+  ${hint(app, 'training', 'The programme applies to the whole squad; the individual slots are scarce '
+    + 'and are where a player is actually made. "This season" is ability gained since August.')}<div class="grid c1-2">
     ${panel('Team programme', `
       <div class="field"><label>Focus</label><select id="training-focus">
         ${TRAINING_FOCUSES.map((f) => `<option value="${esc(f.id)}" ${f.id === (club.trainingFocus || 'Balanced') ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}

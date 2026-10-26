@@ -1,14 +1,16 @@
 // Club screen: board, facilities, training and history.
 
-import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar, toast } from '../components.js';
+import { esc, panel, panelTight, emptyState, kv, raw, tabs, badge, bar, toast, hint} from '../components.js';
 import { userClub, BOARD_REQUESTS, evaluateRequest, makeRequest, availableJobs, takeOverClub } from '../../state/game.js';
 import { showPlayer } from '../playerProfile.js';
 import { squadStrength } from '../../gen/worldgen.js';
 import { money } from '../../core/util.js';
+import { rivalsOf } from '../../engine/rivalry.js';
 
 const VIEWS = [
   { id: 'overview', label: 'Overview' },
   { id: 'staff', label: 'Staff & Facilities' },
+  { id: 'rivals', label: 'Rivals' },
   { id: 'history', label: 'History' },
 ];
 
@@ -32,11 +34,13 @@ export function render(app) {
 
   let body;
   if (state.view === 'staff') body = staffView(club);
+  else if (state.view === 'rivals') body = rivalsView(game, club);
   else if (state.view === 'history') body = historyView(club);
   else body = overviewView(app, club, league);
 
   return {
-    html: `${tabs(VIEWS, state.view)}${body}`,
+    html: `${tabs(VIEWS, state.view)}${hint(app, 'club', 'What the board expects of you, what the facilities are worth, '
+      + 'and what you can ask them for.')}${body}`,
     mount(root) {
       root.querySelectorAll('[data-tab]').forEach((t) => {
         t.onclick = () => { state.view = t.dataset.tab; app.refresh(); };
@@ -169,6 +173,56 @@ function staffView(club) {
       <span class="val mono">${club.coaching[key]}</span></div>`).join('')
     + `<p class="small faint" style="margin-bottom:0">Coaching quality multiplies the development rate of the players it covers.</p>`)}
   </div>`;
+}
+
+/**
+ * Who this club does not like, why, and how it has gone.
+ *
+ * The head-to-head is counted from the fixtures the save still holds, which is
+ * this career rather than all history - so it says "since you arrived", because
+ * claiming a hundred years of results the game never simulated would be a
+ * number with nothing behind it.
+ */
+function rivalsView(game, club) {
+  const world = game.world;
+  const rivals = rivalsOf(world, club);
+  if (!rivals.length) {
+    return panelTight('Rivals', emptyState('No rivalries. Clubs acquire them by sharing a city, '
+      + 'by being the two biggest in the country, or by finishing beside each other year after year.'));
+  }
+  const WHY = {
+    city: 'Share a city with you',
+    historic: 'The other big club in the country',
+    local: 'Finish beside you every season',
+  };
+  const TEMP = [[80, 'Poisonous', 'bad'], [60, 'Hot', 'warn'], [40, 'Simmering', ''], [0, 'Cool', 'faint']];
+  const heatLabel = (h) => TEMP.find(([min]) => h >= min) || TEMP.at(-1);
+
+  return rivals.map((r) => {
+    const met = Object.values(game.fixtures || {}).filter((f) => f.played
+      && ((f.homeId === club.id && f.awayId === r.id) || (f.homeId === r.id && f.awayId === club.id)));
+    let w = 0; let d = 0; let l = 0;
+    for (const f of met) {
+      const us = f.homeId === club.id ? f.result.homeGoals : f.result.awayGoals;
+      const them = f.homeId === club.id ? f.result.awayGoals : f.result.homeGoals;
+      if (us > them) w++; else if (us === them) d++; else l++;
+    }
+    const [, label, cls] = heatLabel(r.heat);
+    return panel(r.opponent.name, `
+      <div class="row" style="gap:14px;align-items:flex-start">
+        ${badge(r.opponent, 46)}
+        <div style="flex:1;min-width:0">
+          ${kv([
+    ['Why', WHY[r.kind] || r.kind],
+    ['Feeling', raw(`<span class="pill ${cls}">${label}</span>`)],
+    ['Since you arrived', met.length ? `${met.length} met — ${w}W ${d}D ${l}L` : 'Not met yet'],
+  ])}
+          <div style="margin-top:8px">${bar(r.heat, r.heat >= 70 ? 'bad' : r.heat >= 45 ? 'warn' : '')}
+            <div class="faint small">A derby fills the ground and shortens tempers.
+              Losing one stokes it; winning one cools it a little.</div></div>
+        </div>
+      </div>`);
+  }).join('');
 }
 
 function historyView(club) {

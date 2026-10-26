@@ -1,6 +1,6 @@
 // Squad list with sortable columns, plus views for contracts and development.
 
-import { esc, panelTight, money, emptyState, tableHead, SQUAD_COLUMNS, sortValue, playerRow, moraleLabel, ratingCell, tabs, bar } from '../components.js';
+import { esc, panelTight, money, emptyState, tableHead, SQUAD_COLUMNS, sortValue, playerRow, moraleLabel, ratingCell, tabs, bar, hint} from '../components.js';
 import { userClub } from '../../state/game.js';
 import { currentAbility, POSITION_GROUP } from '../../data/attributes.js';
 import { sortBy } from '../../core/util.js';
@@ -46,6 +46,8 @@ export function render(app) {
   return {
     html: `
     ${tabs(VIEWS, state.view)}
+    ${hint(app, 'squad', 'Four views of the same squad: who they are, what they cost, '
+    + 'how they are developing, and where you are thin. The chips filter every one of them.')}
     <div class="row wrap" style="margin-bottom:12px">
       <div class="chip-select">
         ${[['all', 'All'], ['available', 'Available'], ['injured', 'Injured'], ['GK', 'Keepers'], ['DEF', 'Defenders'], ['MID', 'Midfield'], ['ATT', 'Attack']]

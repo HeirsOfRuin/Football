@@ -10,6 +10,14 @@ conversation do not.
   give training slots, facility upgrades and board requests something concrete
   behind them. Offered 2026-10 and declined for now.
 
+- **Strengthen the tactical instruction weights, and recalibrate.** Measured
+  during the touchline pass: a changed shape for the last thirty minutes is
+  worth about a tenth of a goal of xG and no measurable points at n=400. The
+  instructions move play in the right directions but not far enough for any
+  in-match decision to be worth making. Fixing it means moving the weights the
+  whole match engine is calibrated against, so it is a pass of its own with a
+  full recalibration, not a tweak.
+
 ## Not yet proposed
 
 - **Press conferences and player conversations.** Morale moves on results,

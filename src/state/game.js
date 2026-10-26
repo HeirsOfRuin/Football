@@ -10,6 +10,10 @@ import { currentAbility } from '../data/attributes.js';
 import { beginMatch, runMatch, playExtraTime, penaltyShootout } from '../engine/match.js';
 import { autoPick, autoAssignSpecialists, refreshRegistration, registrationLimit } from '../engine/lineup.js';
 import {
+  rivalryImportance, rivalryAttendance, rivalryBetween, recordDerbyResult, derbyWeight,
+} from '../engine/rivalry.js';
+import { runWeeklyScouting, scoutCount, assignScout, clearAssignment } from '../engine/scouting.js';
+import {
   buildLeagueSchedule, scheduleDomesticCup, openNextCupRound, scheduleContinental,
   seedContinental, continentalKnockout, openContinentalRound, sortTable, applyResultToTable,
   emptyTableRow, resolveTie, resetFixtureCounter, leagueZones,
@@ -32,7 +36,7 @@ import { news, matchHeadline } from '../engine/news.js';
 // Bump whenever the shape written by the save codec changes, and add a
 // migration in codec.js. Version 2 dropped the stored player `value` field in
 // favour of deriving worth in one place.
-export const GAME_VERSION = 9;
+export const GAME_VERSION = 10;
 
 export function newGame(opts = {}) {
   const {
@@ -57,6 +61,7 @@ export function newGame(opts = {}) {
     transferLog: [],
     shortlist: [],
     scouted: {},
+    scoutAssignments: [],
     negotiations: {},
     vacancies: [],
     status: 'idle',
@@ -301,11 +306,16 @@ export function nextFixtureFor(game, clubId) {
 // --- Match handling ---------------------------------------------------------
 
 function competitionImportance(game, fixture) {
-  if (fixture.continental) return fixture.round === 'Final' ? 1 : 0.7;
-  if (fixture.knockout) return fixture.round === 'Final' ? 0.95 : 0.5;
-  const league = game.world.leagues.find((l) => l.id === fixture.comp);
-  if (!league) return 0.3;
-  return remap(league.rep, 50, 95, 0.2, 0.5);
+  // A rivalry adds to whatever the competition is already worth rather than
+  // replacing it, so a derby in a cup semi-final is the biggest night there is.
+  // Importance is the engine's single word for "how much does this match
+  // matter" - it sets the pressure every player carries and through that the
+  // fouls, the cards and the mistakes - so feeding rivalry in here is what
+  // keeps there being one answer rather than a parallel derby multiplier.
+  const base = fixture.continental ? (fixture.round === 'Final' ? 1 : 0.7)
+    : fixture.knockout ? (fixture.round === 'Final' ? 0.95 : 0.5)
+      : remap(game.world.leagues.find((l) => l.id === fixture.comp)?.rep ?? 50, 50, 95, 0.2, 0.5);
+  return clamp(base + rivalryImportance(game.world, fixture), 0, 1);
 }
 
 export function prepareFixture(game, fixture) {
@@ -331,6 +341,7 @@ export function prepareFixture(game, fixture) {
 export function createMatchState(game, fixture) {
   const { home, away } = prepareFixture(game, fixture);
   const rng = subRng(game.rng, `match:${fixture.id}:${game.season}`);
+  const rivalry = rivalryBetween(game.world, fixture.homeId, fixture.awayId);
   const state = beginMatch(game.world, {
     homeClub: home,
     awayClub: away,
@@ -339,9 +350,15 @@ export function createMatchState(game, fixture) {
     competition: fixture.compName,
     neutral: fixture.neutral,
     importance: competitionImportance(game, fixture),
+    // The crowd is a separate quantity from the nerves. Folding a sell-out into
+    // the importance term would have had a packed ground calming the players
+    // down, which is the opposite of what a derby does to them.
+    crowdBoost: rivalry ? rivalryAttendance(rivalry.heat) : 1,
+    heat: rivalry ? rivalry.heat / 100 : 0,
     rng,
   });
   state.fixtureId = fixture.id;
+  state.rivalry = rivalry;
   return state;
 }
 
@@ -426,12 +443,35 @@ export function finishFixture(game, fixture, state) {
   payAppearanceBonuses(game, state.home, home);
   payAppearanceBonuses(game, state.away, away);
 
+  // Settle the rivalry. Losing one stokes it, winning one cools it slightly:
+  // a rivalry is kept alive by whoever is behind in it.
+  const derby = recordDerbyResult(world, fixture);
+
   const userId = game.userClubId;
   if (fixture.homeId === userId || fixture.awayId === userId) {
     const isHome = fixture.homeId === userId;
     const res = isHome ? outcome[0] : outcome[1];
     recordMatchResult(game.manager, res);
     reportUserMatch(game, fixture, state, isHome, isHome ? bansHome : bansAway);
+    if (derby) {
+      const club = isHome ? home : away;
+      const other = isHome ? away : home;
+      // A multiplier on the move a result already produces, never an addition:
+      // a derby cannot conjure confidence out of nothing, it only makes the
+      // same result count for more. The board and the dressing room both.
+      const w = derbyWeight(derby.heat) - 1;
+      const swing = (res === 'W' ? 5 : res === 'D' ? 0 : -6) * w;
+      if (club.board) club.board.confidence = clamp(club.board.confidence + swing, 0, 100);
+      for (const id of club.squad) {
+        const p = world.players[id];
+        if (p) p.morale = clamp(p.morale + swing * 0.8, 0, 100);
+      }
+      news(game, 'match', res === 'W' ? `${other.short} beaten` : res === 'D' ? `Honours even with ${other.short}`
+        : `Beaten by ${other.short}`,
+      res === 'W' ? `The ${derby.label} goes to ${club.name}. It will be a good week around the place.`
+        : res === 'D' ? `A draw in the ${derby.label}. Nobody will be satisfied with it.`
+          : `${other.name} took the ${derby.label}. The supporters will not forget it quickly.`);
+    }
   }
 
   // Full event logs are only worth keeping for the user's own matches; for the
@@ -570,8 +610,24 @@ export function advanceDay(game) {
   // Recovery, injuries and morale for everyone.
   tickPlayers(game, dayRng);
 
-  // Weekly training and wages.
+  // Weekly training, scouting and wages.
   if (game.day % 7 === 3) runWeeklyTraining(game, dayRng);
+  if (game.day % 7 === 4) {
+    for (const found of runWeeklyScouting(game, subRng(dayRng, 'scouting'))) {
+      const p = found.player;
+      const at = p.clubId ? world.clubs[p.clubId]?.short : 'no club';
+      if (found.kind === 'complete') {
+        news(game, 'transfer', `Report on ${p.name}`,
+          `Your scout has seen enough of ${p.name} (${p.age}, ${p.positions.join('/')}, ${at}). `
+          + 'There is nothing more to learn by watching him; what you see on his profile is what he is.',
+          { playerId: p.id });
+      } else {
+        news(game, 'transfer', `Scout report: ${p.name}`,
+          `${p.name} is ${p.age}, plays ${p.positions.join('/')} for ${at}, and is better than that club. `
+          + 'Worth a longer look, or a bid.', { playerId: p.id });
+      }
+    }
+  }
   if (game.day % 7 === 6) publishTransferDigest(game);
   if (game.day % 7 === 5) {
     for (const club of Object.values(world.clubs)) payWeeklyWages(game, club);
@@ -1962,7 +2018,7 @@ export const BOARD_REQUESTS = {
   training: { id: 'training', label: 'Upgrade the training ground', help: 'Faster development, and more individual training slots.' },
   youth: { id: 'youth', label: 'Upgrade the youth academy', help: 'A better intake, and a clearer read on their potential.' },
   medical: { id: 'medical', label: 'Upgrade the medical department', help: 'Shorter injuries and quicker recovery.' },
-  scouting: { id: 'scouting', label: 'Upgrade the scouting network', help: 'More accurate reports on players you do not know.' },
+  scouting: { id: 'scouting', label: 'Upgrade the scouting network', help: 'More scouts out at once, and sharper reports from them.' },
   stadium: { id: 'stadium', label: 'Expand the stadium', help: 'A bigger ground, and more gate money every home game.' },
   reserve: { id: 'reserve', label: 'Fund a reserve side', help: 'A second squad in a lower division, so fringe players get real football.' },
 };

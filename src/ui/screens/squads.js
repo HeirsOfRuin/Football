@@ -5,7 +5,7 @@
 // are somewhere: registered or not, playing every week for the reserves, or
 // still in the academy with their potential fogged.
 
-import { esc, panel, panelTight, kv, tabs, toast, emptyState, badge, openModal } from '../components.js';
+import { esc, panel, panelTight, kv, tabs, toast, emptyState, badge, openModal, hint} from '../components.js';
 import {
   userClub, sendToReserves, recallFromReserves, setRegistration, reserveSideOf,
   promoteFromAcademy, releaseFromAcademy, acceptsReserveTerms, applyReserveRemit,
@@ -56,7 +56,8 @@ export function render(app) {
   else body = firstTeamView(app, world, club, reserve);
 
   return {
-    html: `${tabs(VIEWS, state.view)}${body}`,
+    html: `${tabs(VIEWS, state.view)}${hint(app, 'squads', 'Only registered players can be picked. '
+      + 'Anyone outside that list is better off in the reserves playing every week than sitting in the stand.')}${body}`,
     mount(root) {
       root.querySelectorAll('[data-tab]').forEach((t) => {
         t.onclick = () => { state.view = t.dataset.tab; app.refresh(); };

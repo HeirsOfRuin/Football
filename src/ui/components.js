@@ -318,4 +318,88 @@ export function tabs(items, active) {
   return `<div class="tabs">${items.map((t) => `<button class="tab ${t.id === active ? 'active' : ''}" data-tab="${esc(t.id)}">${esc(t.label)}</button>`).join('')}</div>`;
 }
 
+// --- Progressive disclosure -------------------------------------------------
+//
+// Measured before any of this was written (`npm run ux`, 390x844, mid-season):
+// Transfers put 1,006 numbers and 405 buttons into eleven screens of scroll, and
+// Home - the first screen anyone ever sees - opened with seven panels and 109
+// numbers above the Continue button. A management game is supposed to be dense,
+// but density you have not asked for is just scrolling.
+//
+// The rule is fold, not remove: nothing becomes unreachable, it becomes one tap
+// away. These three helpers are that one mechanism, so it does not get
+// hand-rolled seven different ways.
+
+/**
+ * Open folds, by id, for the lifetime of the page.
+ *
+ * `app.refresh()` re-renders a whole screen, which would snap every `<details>`
+ * shut again - so the open ones are remembered here and restored on render.
+ * Deliberately not persisted: which sections you had open is not worth a save
+ * migration, and a fresh session starting folded is the behaviour we want.
+ */
+const OPEN_FOLDS = new Map();
+
+/**
+ * A section the reader opens if they want it. Native `<details>`, so it needs no
+ * JavaScript to work, keeps keyboard and screen-reader behaviour for free, and
+ * opens instantly rather than through a re-render.
+ */
+export function fold(id, title, body, { open = false, note = '' } = {}) {
+  const isOpen = OPEN_FOLDS.has(id) ? OPEN_FOLDS.get(id) : open;
+  return `<details class="fold" data-fold="${esc(id)}"${isOpen ? ' open' : ''}>
+    <summary><span class="fold-title">${esc(title)}</span>${
+  note ? `<span class="fold-note">${esc(note)}</span>` : ''}<span class="fold-chev"></span></summary>
+    <div class="fold-body">${body}</div>
+  </details>`;
+}
+
+/** Called once per render from the shell, so no screen has to remember to do it. */
+export function bindFolds(root) {
+  root.querySelectorAll('[data-fold]').forEach((d) => {
+    d.addEventListener('toggle', () => OPEN_FOLDS.set(d.dataset.fold, d.open));
+  });
+}
+
+/**
+ * One dismissible line per screen saying what the screen is for.
+ *
+ * Shown until it is dismissed, then never again on that device; Settings has a
+ * switch to bring them all back. A screen that needs two hints needs rethinking
+ * rather than a second hint.
+ */
+export function hint(app, id, text) {
+  if (app.settings.hintsOff) return '';
+  const seen = app.settings.hintsSeen || {};
+  if (seen[id]) return '';
+  return `<div class="hint" data-hint="${esc(id)}"><span>${esc(text)}</span>
+    <button class="sm ghost" data-hint-close="${esc(id)}" title="Dismiss">Got it</button></div>`;
+}
+
+export function bindHints(root, app) {
+  root.querySelectorAll('[data-hint-close]').forEach((b) => {
+    b.onclick = () => {
+      const seen = { ...(app.settings.hintsSeen || {}) };
+      seen[b.dataset.hintClose] = 1;
+      app.setSetting('hintsSeen', seen);
+      const el = root.querySelector(`[data-hint="${b.dataset.hintClose}"]`);
+      if (el) el.remove();
+    };
+  });
+}
+
+/**
+ * A table whose tail is folded away behind a count.
+ *
+ * Two complete tables rather than one table split across a `<details>`: the
+ * clever version emitted unbalanced tags, and a half-closed table renders
+ * differently in every browser.
+ */
+export function foldTable(id, head, rows, initial, label) {
+  const table = (list) => `<div class="table-wrap"><table>${head}<tbody>${list.join('')}</tbody></table></div>`;
+  if (rows.length <= initial) return table(rows);
+  return table(rows.slice(0, initial))
+    + fold(id, `${rows.length - initial} more ${label}`, table(rows.slice(initial)));
+}
+
 export { shortDate, formatDay, clamp, remap, POSITION_GROUP, familiarity, familiarityLabel, currentAbility };

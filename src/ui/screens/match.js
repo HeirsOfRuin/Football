@@ -3,7 +3,10 @@
 
 import { esc, badge, emptyState, openModal, toast, panelTight } from '../components.js';
 import { createMatchState, finishFixture } from '../../state/game.js';
-import { stepMatch, makeSubstitution, changeMentality, applyTeamTalk, TICKS_PER_HALF } from '../../engine/match.js';
+import {
+  stepMatch, makeSubstitution, changeMentality, applyTeamTalk, touchlineCall, TICKS_PER_HALF,
+} from '../../engine/match.js';
+import { TOUCHLINE_CALLS } from '../../engine/touchline.js';
 import { MENTALITIES } from '../../data/tactics.js';
 import { currentAbility } from '../../data/attributes.js';
 import { sortBy } from '../../core/util.js';
@@ -58,6 +61,7 @@ export function render(app) {
             ${MENTALITIES.map((m) => `<option ${m === userSide.tactic.mentality ? 'selected' : ''}>${esc(m)}</option>`).join('')}
           </select>
           <button id="m-sub" ${state.finished ? 'disabled' : ''}>Substitution (${userSide.subsUsed}/${userSide.subsAllowed})</button>
+          <button id="m-call" ${state.finished ? 'disabled' : ''}>Touchline</button>
           <button id="m-talk" ${state.finished ? 'disabled' : ''}>Team talk</button>` : '<div class="spacer"></div>'}
       </div>
 
@@ -163,6 +167,7 @@ export function render(app) {
           paint();
         };
         root.querySelector('#m-sub').onclick = () => { stop(); showSubDialog(app, state, userSide, paint); };
+        root.querySelector('#m-call').onclick = () => { stop(); showCallDialog(app, state, userSide, paint); };
         root.querySelector('#m-talk').onclick = () => { stop(); showTeamTalk(app, state, userSide, false); };
       }
 
@@ -202,6 +207,49 @@ function sideHtml(state, userSide) {
     </tbody></table>`)}
     ${panelTight(`${home.club.short} — on the pitch`, `<table><tbody>${ratings(home)}</tbody></table>`)}
     ${panelTight(`${away.club.short} — on the pitch`, `<table><tbody>${ratings(away)}</tbody></table>`)}`;
+}
+
+/**
+ * The touchline.
+ *
+ * Each call states what it does to the side and what it costs, and never what
+ * it will achieve. A build that showed the projected outcome of every order got
+ * the verdict "it reveals too much — it just becomes choosing the one with the
+ * best numbers"; the one before it hid everything and got "it doesn't feel like
+ * there is any strategy, just guessing". This is the third version of that
+ * lesson: the mechanism is stated, the result is not.
+ */
+function showCallDialog(app, state, side, paint) {
+  if (state.finished) return;
+  const made = new Set((side.calls || []).map((c) => c.id));
+  openModal({
+    title: 'From the touchline',
+    body: `<p class="small faint" style="margin-top:0">A call lasts the rest of the match. Make the same one
+      twice and the manager opposite will read it — and answer it.</p>
+      <div class="stack">${Object.entries(TOUCHLINE_CALLS).map(([id, c]) => `
+        <div class="call-card ${made.has(id) ? 'done' : ''}" data-call="${esc(id)}">
+          <div class="row" style="gap:10px;align-items:center">
+            <b>${esc(c.label)}</b>
+            ${made.has(id) ? '<span class="pill faint">already called</span>' : ''}
+            <div class="spacer"></div>
+            <button class="sm primary" data-make="${esc(id)}" ${made.has(id) ? 'disabled' : ''}>Call it</button>
+          </div>
+          <div class="small" style="margin-top:4px">${esc(c.does)}</div>
+          <div class="small bad" style="margin-top:2px">${esc(c.costs)}</div>
+        </div>`).join('')}</div>`,
+    wide: true,
+    footer: '<button data-close>Back to the match</button>',
+    onMount(modal, close) {
+      modal.querySelectorAll('[data-make]').forEach((b) => {
+        b.onclick = () => {
+          const res = touchlineCall(state, side, b.dataset.make);
+          toast(res.ok ? res.label : (res.reason || 'Nothing changed.'), res.ok ? '' : 'warn');
+          close();
+          paint();
+        };
+      });
+    },
+  });
 }
 
 function showSubDialog(app, state, side, paint) {

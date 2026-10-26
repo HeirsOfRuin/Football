@@ -15,6 +15,8 @@ import { teamStrength } from '../../engine/ratings.js';
 import { sortBy } from '../../core/util.js';
 import { showPlayer } from '../playerProfile.js';
 import { kitUri } from '../../gen/identity.js';
+import { xiReadiness } from '../attention.js';
+import { fold, hint } from '../components.js';
 
 /**
  * How fit the selected eleven actually is.
@@ -25,10 +27,8 @@ import { kitUri } from '../../gen/identity.js';
  * starters into a match for weeks and reasonably conclude that training is
  * grinding his squad down.
  */
-function readinessLine(lineup) {
-  const picked = lineup.starters.map((s) => s.player).filter(Boolean);
-  const tired = picked.filter((p) => p.condition < 70);
-  const short = picked.filter((p) => p.condition >= 70 && p.condition < 85);
+function readinessLine(world, club) {
+  const { tired, short } = xiReadiness(world, club);
   if (!tired.length && !short.length) {
     return '<p class="good small center" style="margin:6px 0 0">Every one of this XI is fresh.</p>';
   }
@@ -76,6 +76,8 @@ export function render(app) {
 
   return {
     html: `
+    ${hint(app, 'tactics', 'Tap a position to change the player, his role or his duty. '
+    + 'The number on each shirt is his ability in that position, not his ability in general.')}
     <div class="grid c2-1">
       <div class="stack">
         ${panel('Shape', `
@@ -122,11 +124,11 @@ export function render(app) {
   }).join('')}
           </div>
           ${lineup.missing ? `<p class="bad small center">${lineup.missing} position${lineup.missing > 1 ? 's' : ''} cannot be filled — not enough fit players.</p>` : ''}
-          ${readinessLine(lineup)}
+          ${readinessLine(world, club)}
           <p class="faint small center" style="margin-bottom:0">Click a position to change the player, role or duty.</p>
         `)}
 
-        ${panelTight('Bench', lineup.bench.length === 0 ? emptyState('No substitutes available.')
+        ${panelTight('Bench', lineup.bench.length === 0 ? emptyState('No substitutes available — every fit, registered player is already in the XI.')
     : `<table><thead><tr><th>#</th><th>Name</th><th>Pos</th><th>Condition</th><th>Morale</th><th class="num">Ability</th><th></th></tr></thead>
       <tbody>${lineup.bench.map((p) => `<tr>
         <td class="num faint">${p.squadNumber ?? ''}</td>
@@ -149,13 +151,14 @@ export function render(app) {
             </select>
           </div>`).join(''))}
 
-        ${panel('Team Profile', phaseRows.map(([label, v]) => `
+        ${panel('Team Profile', fold('tac-profile', 'What this XI is built for', phaseRows.map(([label, v]) => `
           <div class="attr-row"><span class="label">${esc(label)}</span>
           <span class="bar" style="flex:0 0 110px"><span style="width:${Math.round((v / maxPhase) * 100)}%"></span></span>
           <span class="val mono">${Math.round(v / 10)}</span></div>`).join('')
-    + `<p class="faint small" style="margin:10px 0 0">Relative weighting of this XI's contributions, not an absolute rating.</p>`)}
+    + `<p class="faint small" style="margin:10px 0 0">Relative weighting of this XI's contributions, not an absolute rating.</p>`))}
 
-        ${panel('Set Pieces &amp; Captain', ['captain', 'penaltyTaker', 'freeKickTaker', 'cornerTaker'].map((key) => {
+        ${panel('Set Pieces &amp; Captain', fold('tac-setpieces', 'Captain, penalties, free kicks, corners',
+    ['captain', 'penaltyTaker', 'freeKickTaker', 'cornerTaker'].map((key) => {
     const label = { captain: 'Captain', penaltyTaker: 'Penalties', freeKickTaker: 'Free kicks', cornerTaker: 'Corners' }[key];
     const options = club.squad.map((id) => world.players[id]).filter(Boolean);
     return `<div class="field" style="margin-bottom:9px"><label>${esc(label)}</label>
@@ -163,7 +166,7 @@ export function render(app) {
           <option value="">— none —</option>
           ${sortBy(options, (p) => p.name).map((p) => `<option value="${esc(p.id)}" ${tactic[key] === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
         </select></div>`;
-  }).join('') + '<button class="sm" data-act="autospecial">Pick automatically</button>')}
+  }).join('') + '<button class="sm" data-act="autospecial">Pick automatically</button>'))}
       </div>
     </div>`,
 

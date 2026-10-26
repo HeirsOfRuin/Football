@@ -1,6 +1,6 @@
 // Finances: budgets, the season's ledger and wage commitments.
 
-import { esc, panel, panelTight, money, emptyState, kv, raw, shortDate, toast, bar } from '../components.js';
+import { esc, panel, panelTight, money, emptyState, kv, raw, shortDate, toast, bar, fold, hint } from '../components.js';
 import { userClub } from '../../state/game.js';
 import { wageBudgetUsage, financialHealth, adjustBudgets } from '../../engine/finance.js';
 import { sortBy } from '../../core/util.js';
@@ -26,6 +26,8 @@ export function render(app) {
 
   return {
     html: `
+    ${hint(app, 'finances', 'Position and Budgets are what the board judges. '
+    + 'The season summary says where the money went; the full ledger is folded under it.')}
     <div class="grid c3">
       ${panel('Position', kv([
     ['Balance', raw(`<span class="${f.balance >= 0 ? 'good' : 'bad'}">${money(f.balance)}</span>`)],
@@ -42,13 +44,13 @@ export function render(app) {
   ])}
         <div style="margin-top:10px">${bar(usage.pct * 100, usage.pct > 1 ? 'bad' : usage.pct > 0.9 ? 'warn' : '')}
         <div class="faint small">${Math.round(usage.pct * 100)}% of the wage budget used</div></div>`)}
-      ${panel('Move Money', `
-        <p class="small faint" style="margin-top:0">The board will let you shift funds between budgets, within reason.</p>
+      ${panel('Move Money', fold('fin-move', 'Shift funds between budgets', `
+        <p class="small faint" style="margin-top:0">The board will let you move money between the two, within reason.</p>
         <div class="field"><label>Amount</label><input type="number" id="fin-amount" value="1000000" step="250000" min="0"></div>
         <div class="row" style="gap:8px">
           <button class="sm" data-act="to-wages">Transfers → wages</button>
           <button class="sm" data-act="to-transfers">Wages → transfers</button>
-        </div>`)}
+        </div>`))}
     </div>
 
     <div class="grid c2">
@@ -57,32 +59,38 @@ export function render(app) {
         ${categories.map(([cat, total]) => `<tr><td>${esc(labelFor(cat))}</td>
           <td class="num ${total >= 0 ? 'good' : 'bad'}">${money(total)}</td></tr>`).join('')}
       </tbody></table>`)}
-      ${panelTight('Top Earners', `<table><thead><tr><th>Player</th><th class="num">Wage</th><th class="num">Expires</th><th class="num">% of bill</th></tr></thead>
+      ${panelTight('Top Earners', fold('fin-earners', `Your ${earners.length} biggest wages`, `<table><thead><tr><th>Player</th><th class="num">Wage</th><th class="num">Expires</th><th class="num">% of bill</th></tr></thead>
       <tbody>${earners.map((p) => `<tr class="clickable" data-player="${esc(p.id)}">
         <td class="nowrap">${esc(p.name)}</td>
         <td class="num">${money(p.contract.wage)}</td>
         <td class="num faint">${p.contract.expiresYear}</td>
         <td class="num faint">${((p.contract.wage / Math.max(1, usage.weekly)) * 100).toFixed(1)}%</td>
-      </tr>`).join('')}</tbody></table>`)}
+      </tr>`).join('')}</tbody></table>`))}
     </div>
 
     ${panelTight('Ledger', f.ledger.length === 0 ? emptyState('Nothing recorded yet.')
-    : `<div class="table-wrap" style="max-height:420px"><table><thead><tr>
+    : fold('fin-ledger', `Every transaction this season (${f.ledger.length})`,
+      `<div class="table-wrap" style="max-height:420px"><table><thead><tr>
         <th>Date</th><th>Description</th><th class="num">Amount</th></tr></thead>
       <tbody>${[...f.ledger].reverse().map((e) => `<tr>
         <td class="small faint nowrap">${esc(shortDate(e.day, world.year))}</td>
         <td class="small">${esc(e.label)}</td>
         <td class="num ${e.amount >= 0 ? 'good' : 'bad'}">${money(e.amount)}</td></tr>`).join('')}
-      </tbody></table></div>`)}`,
+      </tbody></table></div>`))}`,
 
     mount(root) {
+      // Inside a fold, so present but only rendered when opened in some browsers -
+      // and absent entirely if the markup ever changes again. A null here used to
+      // throw and take the whole screen's bindings with it.
       const amountEl = root.querySelector('#fin-amount');
-      root.querySelector('[data-act="to-wages"]').onclick = () => {
+      const toWages = root.querySelector('[data-act="to-wages"]');
+      const toTransfers = root.querySelector('[data-act="to-transfers"]');
+      if (toWages) toWages.onclick = () => {
         const moved = adjustBudgets(world, club, Math.max(0, Number(amountEl.value) || 0));
         toast(moved > 0 ? `${money(moved)} moved to the wage budget.` : 'Not enough in the transfer budget.', moved > 0 ? '' : 'warn');
         app.refresh();
       };
-      root.querySelector('[data-act="to-transfers"]').onclick = () => {
+      if (toTransfers) toTransfers.onclick = () => {
         const moved = adjustBudgets(world, club, -Math.max(0, Number(amountEl.value) || 0));
         toast(moved < 0 ? `${money(-moved)} moved to the transfer budget.` : 'The wage budget is fully committed.', moved < 0 ? '' : 'warn');
         app.refresh();

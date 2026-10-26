@@ -6,6 +6,7 @@
 // well inside browser storage limits and makes them quick to write.
 
 import { ALL_ATTRS, HIDDEN_ATTRS } from '../data/attributes.js';
+import * as RIVALRY_MODULE from '../engine/rivalry.js';
 import { GAME_VERSION, managerContract } from './game.js';
 import { emptyStats } from '../gen/playergen.js';
 
@@ -195,6 +196,7 @@ export function serialiseGame(game) {
       transferLog: game.transferLog,
       shortlist: game.shortlist,
       scouted: game.scouted,
+      scoutAssignments: game.scoutAssignments || [],
       negotiations: game.negotiations || {},
       vacancies: game.vacancies || [],
       offers: game.offers || [],
@@ -347,6 +349,13 @@ export function migrateSave(data) {
       data.game.manager.contract = managerContract(userClub, data.world.year);
     }
   }
+  // v9 -> v10: rivalries. Derived entirely from city, reputation and division
+  // and taking no randomness, so an existing world can be given them without
+  // becoming a different world - the clubs, the players and every future draw
+  // are untouched. Any heat already earned is preserved by assignRivalries.
+  if (version < 10 && data.world?.clubs) {
+    RIVALRY_MODULE.assignRivalries({ clubs: data.world.clubs });
+  }
   return { ...data, v: GAME_VERSION };
 }
 
@@ -385,6 +394,7 @@ export function deserialiseGame(raw) {
     transferLog: g.transferLog,
     shortlist: g.shortlist || [],
     scouted: g.scouted || {},
+    scoutAssignments: g.scoutAssignments || [],
     negotiations: g.negotiations || {},
     vacancies: g.vacancies || [],
     offers: g.offers || [],

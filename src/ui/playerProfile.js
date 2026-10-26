@@ -37,7 +37,7 @@ export function showPlayer(app, playerId, opts = {}) {
 
   // Players outside the club are seen through the scouting network.
   const report = !isOurs && user
-    ? scoutReport(world, user, p, subRng(game.rng, `scout:${p.id}:${game.season}`))
+    ? scoutReport(world, user, p, subRng(game.rng, `scout:${p.id}:${game.season}`), game)
     : null;
 
   const contract = p.contract;

@@ -1,6 +1,7 @@
 // World generation: nations -> leagues -> clubs -> squads -> staff -> finances.
 
 import { Rng, subRng } from '../core/rng.js';
+import { assignRivalries } from '../engine/rivalry.js';
 import { assignIdentities } from './identity.js';
 import { clamp, remap, sortBy } from '../core/util.js';
 import {
@@ -412,8 +413,20 @@ export function generateWorld(opts = {}) {
       // bottom of its division, which is exactly where those slots were.
       const realClubs = league.teams - (league.reserveSlots || 0);
 
+      // Two clubs in one city, every so often.
+      //
+      // Every club used to get a city of its own, which quietly removed the
+      // oldest fixture in football: measured across four worlds, exactly zero
+      // city derbies existed. Reusing the previous club's name for one in five
+      // is deterministic and takes no extra randomness, though it does shift
+      // the city namer's stream - so a given seed builds a different world from
+      // the one it built before this change. Saves already made are unaffected;
+      // they carry their world with them.
+      let lastCity = null;
       for (let i = 0; i < realClubs; i++) {
-        const city = cityNamer();
+        const shareCity = i > 0 && i % 5 === 0 && lastCity;
+        const city = shareCity ? lastCity : cityNamer();
+        lastCity = city;
         const name = clubNamer(city);
         const rep = Math.round(reps[i]);
         // Non-league grounds hold hundreds, not fifteen thousand.
@@ -570,6 +583,12 @@ export function generateWorld(opts = {}) {
   }
 
   if (customPlayers.length) injectCustomPlayers(world, customPlayers, customPlacement, subRng(rng, 'custom'), year);
+
+  // Who hates whom. Derived from city, reputation and division, and takes no
+  // randomness at all - drawing it from the stream here would shift every later
+  // draw and re-roll the world, and an existing save could never be given
+  // rivalries without becoming a different save.
+  assignRivalries(world);
 
   buildCompetitions(world, rng);
   world.rngState = rng.save();

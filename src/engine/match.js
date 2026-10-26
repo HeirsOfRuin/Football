@@ -10,6 +10,7 @@
 // substitutions, team talks and tactical changes, then resume.
 
 import { Rng } from '../core/rng.js';
+import { makeCall, readOpponent, TOUCHLINE_CALLS, CALL_IDS } from './touchline.js';
 import { clamp, remap, weightedAttrs } from '../core/util.js';
 import { teamStrength, keeperRating, computeMatchRating, traitEffects } from './ratings.js';
 import { buildLineup } from './lineup.js';
@@ -88,6 +89,11 @@ function buildSide(world, club, tactic, opts) {
     isUser: !!club.isUserClub,
     strength: null,
     goals: 0,
+    // Touchline calls made, and the opponent's patterns already answered. Both
+    // live on the side rather than in the interface, because the other manager
+    // has to be able to read them.
+    calls: [],
+    countered: [],
   };
   for (const e of side.onPitch) {
     const r = newRecord(e.player, true);
@@ -119,6 +125,7 @@ export function beginMatch(world, ctx) {
   const {
     homeClub, awayClub, homeTactic, awayTactic, competition = 'League',
     neutral = false, importance = 0.3, seed, legInfo = null, subsAllowed = 5,
+    crowdBoost = 1, heat = 0,
   } = ctx;
   const rng = ctx.rng || new Rng(seed ?? Date.now());
 
@@ -129,7 +136,8 @@ export function beginMatch(world, ctx) {
   const crowdPull = remap(homeClub.rep, 25, 95, 0.55, 1.0);
   const attendance = neutral
     ? Math.round(Math.min(homeClub.stadium.capacity, 45000) * rng.range(0.8, 0.98))
-    : Math.round(homeClub.stadium.capacity * clamp(homeClub.finances.capacityUse * rng.range(0.9, 1.05) * (1 + importance * 0.08), 0.35, 1));
+    : Math.round(homeClub.stadium.capacity
+      * clamp(homeClub.finances.capacityUse * rng.range(0.9, 1.05) * (1 + importance * 0.08) * crowdBoost, 0.35, 1));
 
   const state = {
     rng,
@@ -144,6 +152,14 @@ export function beginMatch(world, ctx) {
     minute: 0,
     half: 1,
     stoppage: 0,
+    // How ill-tempered the match is, which is not the same question as how much
+    // it matters. A continental final matters enormously and is usually played
+    // in silence between two sides who have never met; a fourth-tier derby
+    // matters to nobody outside the town and is vicious. `importance` answers
+    // the first and feeds the players' nerves; this answers the second and
+    // feeds the fouls and the cards. Zero unless something made it otherwise,
+    // so every match that is not a derby is byte-identical to before.
+    heat: clamp(heat, 0, 1),
     homeAdvantage: neutral ? 1.0 : 1 + 0.040 * crowdPull,
     possession: rng.chance(0.5) ? 'home' : 'away',
     zone: 0,
@@ -464,7 +480,8 @@ function registerFoul(state, foulingSide, victimSide, offender, dangerous = fals
   const r = rec(foulingSide, p.id);
   const dirt = (p.hidden?.dirtiness ?? 10);
   const tackleI = instrIndex(foulingSide.tactic.instructions, 'tackling');
-  let yellowP = P.yellowPerFoul * remap(dirt, 3, 18, 0.7, 1.5) * (1 + tackleI * 0.25) * (dangerous ? 2.4 : 1);
+  let yellowP = P.yellowPerFoul * remap(dirt, 3, 18, 0.7, 1.5) * (1 + tackleI * 0.25)
+    * (dangerous ? 2.4 : 1) * (1 + state.heat * 0.35);
   if (r.yellow >= 1) yellowP *= P.secondYellowDamping;
   if (state.rng.chance(clamp(yellowP, 0, 0.85))) {
     if (r.yellow >= 1) {
@@ -560,6 +577,21 @@ export function changeMentality(state, side, mentality) {
   pushEvent(state, 'tactic', `${side.club.short} switch to a ${mentality.toLowerCase()} approach.`, { side: side.side });
 }
 
+/**
+ * A call from the touchline.
+ *
+ * Goes through the engine rather than letting the interface write into
+ * `side.tactic` directly, so the strength cache is refreshed and the call is
+ * recorded where the opposing manager can read it.
+ */
+export function touchlineCall(state, side, id) {
+  const res = makeCall(state, side, id);
+  if (!res.ok) return res;
+  refreshStrength(state, side);
+  pushEvent(state, 'tactic', res.text, { side: side.side });
+  return res;
+}
+
 export function changeInstruction(state, side, key, value) {
   side.tactic.instructions = { ...side.tactic.instructions, [key]: value };
   refreshStrength(state, side);
@@ -578,6 +610,20 @@ function aiManage(state, side) {
   const opp = opponentOf(state, side);
   const diff = side.goals - opp.goals;
   const m = state.minute;
+
+  // Has he worked out what you are doing? Repeat a touchline call and the
+  // manager in the other technical area eventually counters it. Without this
+  // the best strategy would be to find the strongest call and hold it down.
+  const counter = readOpponent(state, side);
+  if (counter) {
+    const res = makeCall(state, side, counter);
+    if (res.ok) {
+      pushEvent(state, 'tactic',
+        `${side.club.manager?.name || side.club.short} has seen enough of that. ${res.text}`,
+        { side: side.side });
+      refreshStrength(state, side);
+    }
+  }
 
   // Chase or protect a result.
   const mgr = side.club.manager;
@@ -689,7 +735,7 @@ function pickInjuryType(rng, days) {
 function rollFouls(state, side, opp, zone) {
   const tackleI = instrIndex(opp.tactic.instructions, 'tackling');
   const pressI = instrIndex(opp.tactic.instructions, 'pressing');
-  const pDef = P.foulPerTick * (1 + tackleI * 0.28 + pressI * 0.12);
+  const pDef = P.foulPerTick * (1 + tackleI * 0.28 + pressI * 0.12) * (1 + state.heat * 0.30);
   if (state.rng.chance(pDef)) {
     const offender = pickByPhase(state, opp, state.rng.chance(0.6) ? 'defend' : 'press');
     if (offender) registerFoul(state, opp, side, offender, zone === 2 && state.rng.chance(0.2));
@@ -703,7 +749,7 @@ function rollFouls(state, side, opp, zone) {
     }
     return 'freekick';
   }
-  if (state.rng.chance(P.attackFoulPerTick)) {
+  if (state.rng.chance(P.attackFoulPerTick * (1 + state.heat * 0.30))) {
     const offender = pickByPhase(state, side, 'drive');
     if (offender) registerFoul(state, side, opp, offender, false);
     state.possession = opp.side;

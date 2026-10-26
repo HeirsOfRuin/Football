@@ -1,6 +1,7 @@
 // The transfer market: valuations, offers, contracts, loans and AI activity.
 
 import { clamp, remap, sortBy } from '../core/util.js';
+import { fogBand, knowledgeLabel } from './scouting.js';
 import { currentAbility, abilityForPosition, positionEffectiveness } from '../data/attributes.js';
 import { estimateValue, estimateWage } from '../gen/playergen.js';
 import { squadDepth, registrationLimit, refreshRegistration } from './lineup.js';
@@ -594,17 +595,32 @@ export function releasePlayer(game, player) {
   if (!world.freeAgents.includes(player.id)) world.freeAgents.push(player.id);
 }
 
-/** Scout report accuracy depends on the club's scouting network. */
-export function scoutReport(world, club, player, rng) {
-  const accuracy = remap(club.facilities?.scouting ?? 10, 1, 20, 0.32, 0.94);
-  const ca = currentAbility(player);
-  const noise = (1 - accuracy) * 40;
+/**
+ * What the club believes about a player it does not own.
+ *
+ * Now a reading of how much the club actually knows rather than a dice roll
+ * against its facility, and it delegates the band to `fogBand` so that this and
+ * the transfer list cannot disagree - which they did: the list printed the
+ * exact ability and the exact potential of every player in the world, one
+ * screen before the profile carefully showed a range.
+ *
+ * `rng` is still accepted and ignored. Callers pass a seeded stream and
+ * removing the parameter would be a change to five call sites for no gain.
+ */
+export function scoutReport(world, club, player, rng, game = null) {
+  const g = game || { scouted: {} };
+  const ability = fogBand(g, world, club, player, currentAbility(player));
+  const potential = fogBand(g, world, club, player, player.pa, { potential: true });
+  const k = ability.knowledge;
   return {
-    abilityLow: Math.round(clamp(ca - rng.range(0, noise), 1, 200)),
-    abilityHigh: Math.round(clamp(ca + rng.range(0, noise), 1, 200)),
-    potentialLow: Math.round(clamp(player.pa - rng.range(0, noise * 1.6), 1, 200)),
-    potentialHigh: Math.round(clamp(player.pa + rng.range(0, noise * 1.6), 1, 200)),
-    accuracy,
-    knownPersonality: accuracy > 0.55 ? player.personality : 'Unknown',
+    abilityLow: ability.low,
+    abilityHigh: ability.high,
+    potentialLow: potential.low,
+    potentialHigh: potential.high,
+    knowledge: k,
+    label: knowledgeLabel(k),
+    accuracy: k / 100,
+    // You can read a man's temperament by watching him, not by reading a list.
+    knownPersonality: k >= 55 ? player.personality : 'Unknown',
   };
 }

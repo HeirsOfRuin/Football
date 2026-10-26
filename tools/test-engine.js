@@ -37,6 +37,10 @@ import {
   noteDeparture, retirePlayer, endSpell,
 } from '../src/state/career.js';
 import { crestSvg, kitSvg, crestUri, paletteFor, assignIdentities } from '../src/gen/identity.js';
+import * as RIVALRY from '../src/engine/rivalry.js';
+import * as SCOUT from '../src/engine/scouting.js';
+import * as TOUCH from '../src/engine/touchline.js';
+import * as MATCH from '../src/engine/match.js';
 import {
   openTransferTalks, transferOffer, termsOffer, cashEquivalent, termsEquivalent,
   openLoanTalks, loanOffer, willLend, willTakeInSwap, SWAP_DISCOUNT,
@@ -1526,6 +1530,239 @@ for (const c of Object.values(world.clubs)) c.tactic = autoAssignSpecialists(wor
   check('with it on, an exhausted starter is rested',
     !startingXI(on.g).has(on.victimId),
     'the setting is read nowhere and the tired man plays anyway');
+}
+
+// --- The touchline ------------------------------------------------------------
+{
+  const league = world.leagues.find((l) => l.tier === 1);
+  const [a, b] = league.clubIds.slice(0, 2).map((id) => world.clubs[id]);
+  const fresh = () => {
+    for (const c of [a, b]) {
+      for (const id of c.squad) {
+        Object.assign(world.players[id],
+          { condition: 96, matchCondition: 96, morale: 70, form: 0, sharpness: 85 });
+      }
+    }
+    return MATCH.beginMatch(world, {
+      homeClub: a, awayClub: b, homeTactic: JSON.parse(JSON.stringify(a.tactic)),
+      awayTactic: JSON.parse(JSON.stringify(b.tactic)), importance: 0.4, rng: new Rng(242424),
+    });
+  };
+
+  // Every call must move the instructions it claims to move. A button that
+  // changes nothing is the failure this project has found four times already.
+  for (const id of TOUCH.CALL_IDS) {
+    const st = fresh();
+    const before = JSON.stringify(st.home.tactic.instructions);
+    MATCH.touchlineCall(st, st.home, id);
+    check(`the call "${TOUCH.TOUCHLINE_CALLS[id].label}" changes how the side plays`,
+      JSON.stringify(st.home.tactic.instructions) !== before,
+      'the call is in the list and the engine does not read it');
+    check(`"${TOUCH.TOUCHLINE_CALLS[id].label}" says what it costs`,
+      !!TOUCH.TOUCHLINE_CALLS[id].costs && !!TOUCH.TOUCHLINE_CALLS[id].does);
+  }
+
+  // ...and the match that follows has to actually differ.
+  {
+    const plain = fresh();
+    MATCH.runMatch(plain);
+    const pressed = fresh();
+    MATCH.touchlineCall(pressed, pressed.home, 'press');
+    MATCH.runMatch(pressed);
+    check('a call changes the match that follows it',
+      JSON.stringify(plain.result) !== JSON.stringify(pressed.result),
+      'the instructions moved and the simulation did not notice');
+  }
+
+  // The opposing manager reads a repeated call. Without this, one call is the
+  // answer to every match and the rest are scenery.
+  {
+    const st = fresh();
+    st.away.club = { ...st.away.club, manager: { ...st.away.club.manager, tactical: 20, attacking: 20 } };
+    MATCH.touchlineCall(st, st.home, 'press');
+    MATCH.touchlineCall(st, st.home, 'press');
+    let answered = null;
+    for (let i = 0; i < 40 && !answered; i++) answered = TOUCH.readOpponent(st, st.away);
+    check('a repeated call gets read by the other manager', !!answered,
+      'you can hold one call down all game and nobody adjusts');
+    check('one call is only ever answered once',
+      TOUCH.readOpponent(st, st.away) === null,
+      'the counter fires every tick, so a single pattern rewrites his tactics forever');
+  }
+}
+
+// --- Knowing things about players you do not own -----------------------------
+{
+  const g = newGame({ seed: 606060, size: 'small', managerName: 'Scout', clubId: null });
+  const lg = g.world.leagues.find((l) => l.nation === 'ALB' && l.tier === 1);
+  takeOverClub(g, lg.clubIds[2], 'Scout', 'ALB');
+  const club = userClub(g);
+  const mine = g.world.players[club.squad[0]];
+  const foreign = Object.values(g.world.players).find((p) => {
+    const c = p.clubId ? g.world.clubs[p.clubId] : null;
+    return c && c.nation !== club.nation;
+  });
+
+  check('a scouting network buys scouts', SCOUT.scoutCount(club) >= 2 && SCOUT.scoutCount(club) <= 5);
+  check('your own players are not a mystery',
+    SCOUT.fogBand(g, g.world, club, mine, currentAbility(mine)).exact);
+
+  const far = SCOUT.fogBand(g, g.world, club, foreign, currentAbility(foreign));
+  check('a player in another country is a range, not a number',
+    !far.exact && far.high > far.low,
+    'the fog is not applied, so the transfer list tells you everything about everyone');
+
+  // The regression that matters most. A band drawn symmetrically around the
+  // truth is no fog at all - its midpoint is the answer, so a search sorted by
+  // it ranks the world perfectly and the scouting network buys nothing.
+  const strangers = Object.values(g.world.players).filter((p) => {
+    const c = p.clubId ? g.world.clubs[p.clubId] : null;
+    return c && c.nation !== club.nation;
+  }).slice(0, 200);
+  const wrong = strangers.filter((p) => {
+    const b = SCOUT.fogBand(g, g.world, club, p, currentAbility(p));
+    return b.estimate !== currentAbility(p);
+  }).length;
+  check('what the scouts believe is wrong, not merely vague',
+    wrong > strangers.length * 0.8,
+    `only ${wrong} of ${strangers.length} estimates differ from the truth, so sorting by them sorts the world correctly`);
+
+  // ...and the error has to shrink as they learn, or watching him is pointless.
+  const before = Math.abs(SCOUT.fogBand(g, g.world, club, foreign, currentAbility(foreign)).estimate
+    - currentAbility(foreign));
+  g.scouted[foreign.id] = { k: 100, seen: g.day };
+  const after = SCOUT.fogBand(g, g.world, club, foreign, currentAbility(foreign));
+  check('watching a player closes the gap to the truth',
+    after.exact && after.estimate === currentAbility(foreign) && before >= 0);
+
+  // A scout actually goes somewhere and actually learns something.
+  const other = g.world.leagues.find((l) => l.nation === 'ALB' && l.tier === 2);
+  check('scouts are a scarce resource', (() => {
+    let sent = 0;
+    for (let i = 0; i < 12; i++) if (SCOUT.assignScout(g, club, { type: 'league', target: other.id })) sent++;
+    return sent === SCOUT.scoutCount(club);
+  })(), 'the cap on simultaneous assignments is not enforced');
+
+  const target = Object.values(g.world.players).find((p) => {
+    const c = p.clubId ? g.world.clubs[p.clubId] : null;
+    return c && c.leagueId === other.id;
+  });
+  const k0 = SCOUT.knowledgeOf(g, target.id);
+  for (let w = 0; w < 30; w++) SCOUT.runWeeklyScouting(g, new Rng(1000 + w));
+  const known = Object.keys(g.scouted).filter((id) => SCOUT.knowledgeOf(g, id) > k0).length;
+  check('a scout sent to a division learns about it', known > 10,
+    `after thirty weeks the scouts know about ${known} players`);
+
+  // And knowledge nobody refreshes goes stale.
+  g.scoutAssignments = [];
+  g.scouted.staleTest = { k: 50, seen: g.day - 400 };
+  for (let w = 0; w < 20; w++) { g.day += 7; SCOUT.runWeeklyScouting(g, new Rng(2000 + w)); }
+  check('knowledge you stop refreshing fades',
+    (g.scouted.staleTest?.k ?? 0) < 50, 'a shortlist scouted once is accurate forever');
+}
+
+// --- A derby has to play like one --------------------------------------------
+{
+  const clubs = Object.values(world.clubs).filter((c) => !c.affiliateOf);
+  const withRivals = clubs.filter((c) => (c.rivals || []).length);
+  check('every club has someone it would rather not lose to',
+    withRivals.length === clubs.length,
+    `${clubs.length - withRivals.length} clubs have no rival at all`);
+  check('nobody carries more than two rivalries',
+    clubs.every((c) => c.rivals.length <= 2));
+  check('a rivalry is mutual', clubs.every((c) => c.rivals.every((r) => {
+    const other = world.clubs[r.id];
+    return (other.rivals || []).some((x) => x.id === c.id);
+  })), 'one club hates another that has never heard of it');
+  check('reserve sides have no rivals',
+    Object.values(world.clubs).filter((c) => c.affiliateOf).every((c) => !(c.rivals || []).length));
+  check('city derbies exist at all',
+    clubs.some((c) => c.rivals.some((r) => r.kind === 'city')),
+    'every club has its own city, so the oldest fixture in football cannot happen');
+
+  // The regression that defines this feature. Rivalry reaches the match through
+  // two terms; if either stopped being read, the fixture would still say
+  // "derby" and play exactly like a Tuesday night in November.
+  const pair = (() => {
+    for (const c of clubs) {
+      for (const r of c.rivals) {
+        const o = world.clubs[r.id];
+        if (o && o.leagueId === c.leagueId) return { a: c, b: o, heat: r.heat };
+      }
+    }
+    return null;
+  })();
+  if (pair) {
+    // Reset the squads between runs. A match leaves `matchCondition` on every
+    // player who was on the pitch and only applyMatchEffects clears it, so two
+    // simulations back to back are not the same experiment: the second is
+    // played by eleven men who have just played ninety minutes. The first
+    // version of this test did exactly that, and the "nothing else changed"
+    // assertion failed for that reason rather than for the one it was checking.
+    const reset = () => {
+      for (const c of [pair.a, pair.b]) {
+        for (const id of c.squad) {
+          Object.assign(world.players[id],
+            { condition: 96, matchCondition: 96, morale: 70, form: 0, sharpness: 85 });
+        }
+      }
+    };
+    const play = (ctx, seed) => {
+      reset();
+      return simulateMatch(world, {
+        homeClub: pair.a, awayClub: pair.b, homeTactic: pair.a.tactic, awayTactic: pair.b.tactic,
+        importance: 0.4, rng: new Rng(seed), ...ctx,
+      });
+    };
+    // One match is a coin toss; twelve is an answer. Fouls are a rate, so the
+    // comparison is over a run rather than a single sample.
+    let coldFouls = 0;
+    let hotFouls = 0;
+    for (let i = 0; i < 12; i++) {
+      const cold = play({}, 600000 + i);
+      const hot = play({ heat: 1 }, 600000 + i);
+      coldFouls += cold.home.stats.fouls + cold.away.stats.fouls;
+      hotFouls += hot.home.stats.fouls + hot.away.stats.fouls;
+    }
+    check('heat reaches the fouls and the cards', hotFouls > coldFouls * 1.1,
+      `the heat term is computed and the engine barely reads it (${coldFouls} cold, ${hotFouls} hot)`);
+
+    // Nothing that is not a derby may change, or every match in the game just
+    // moved underneath the calibration.
+    const a = play({}, 818181);
+    const b = play({ heat: 0 }, 818181);
+    check('a match with no rivalry is untouched by any of this',
+      JSON.stringify(a.result) === JSON.stringify(b.result),
+      'the default heat is not neutral, so every ordinary fixture has changed');
+  }
+
+  // Heat is earned and lost, and never escapes its bounds.
+  {
+    const w = { clubs: { x: { id: 'x', rivals: [{ id: 'y', kind: 'city', heat: 70 }] },
+      y: { id: 'y', rivals: [{ id: 'x', kind: 'city', heat: 70 }] } } };
+    const fx = { homeId: 'x', awayId: 'y', result: { homeGoals: 3, awayGoals: 0 } };
+    RIVALRY.recordDerbyResult(w, fx);
+    check('the beaten side takes it harder', w.clubs.y.rivals[0].heat > w.clubs.x.rivals[0].heat);
+    for (let i = 0; i < 60; i++) RIVALRY.recordDerbyResult(w, fx);
+    check('heat stops at 100', w.clubs.y.rivals[0].heat <= 100);
+    check('heat never falls below the reason for it', w.clubs.x.rivals[0].heat >= 42);
+  }
+
+  // Re-deriving rivalries must not wipe the heat a career has built up - the
+  // save migration runs this function over a world that already has history.
+  {
+    const target = withRivals[0];
+    // Capture the pair by id before anything is rebuilt: assignRivalries
+    // replaces the arrays, so holding on to an index would be reading a
+    // different rivalry afterwards and the assertion would prove nothing.
+    const otherId = target.rivals[0].id;
+    target.rivals[0].heat = 97;
+    RIVALRY.assignRivalries(world);
+    const after = (world.clubs[target.id].rivals || []).find((r) => r.id === otherId);
+    check('re-deriving rivalries keeps the heat already earned',
+      after && after.heat === 97,
+      'a save migration would reset every grudge in the world');
+  }
 }
 
 // --- Custom player library ---------------------------------------------------
