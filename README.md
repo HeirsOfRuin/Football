@@ -8,6 +8,21 @@ Runs in a browser with no build step and no dependencies.
 
 ---
 
+## Publishing it
+
+The game is static files with relative paths throughout, so any static host
+serves it as-is. For GitHub Pages: Settings -> Pages -> Source "Deploy from a
+branch" -> the default branch -> folder `/ (root)`. It lands at
+`https://<owner>.github.io/<repo>/`.
+
+`.nojekyll` at the root is load-bearing and deliberately committed: a branch
+deploy runs the files through Jekyll first, which has its own ideas about what
+to publish, and the failure mode is a page that builds successfully and serves
+nothing.
+
+A successful "pages build and deployment" run is not the same thing as a live
+site. Check the URL itself.
+
 ## Running it
 
 The game is plain ES modules, so it needs to be served over HTTP (not opened as a `file://`
